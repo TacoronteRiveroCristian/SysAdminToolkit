@@ -1,0 +1,31 @@
+version: '3.6'
+
+networks:
+  default:
+    driver: bridge
+    ipam:
+      driver: default
+
+services:
+  volume_creator:
+    container_name: volume_creator
+    image: busybox:1.36
+    command: >
+      sh -c "mkdir -p
+      ./volumes/codeserver/project
+      && chown -R 1000:1000 ./volumes"
+    volumes:
+    - ./volumes:/volumes
+
+  code-server:
+    container_name: code-server
+    build:
+      context: .
+      dockerfile: Dockerfiles/code-server.Dockerfile
+    environment:
+      - PASSWORD=mlops
+    ports:
+      - "3030:8080"
+    volumes:
+      - ./volumes/codeserver/project:/home/coder/project
+    image: code-server:compose
