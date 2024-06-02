@@ -12,9 +12,3 @@ Para clonar el repositorio global junto con todos los submódulos, utiliza los s
 ```bash
 git clone --recursive https://github.com/tu-usuario/SysAdminToolkit.git
 ```
-
-### Clonar un Submódulo Específico
-
-```bash
-git clone https://github.com/tu-usuario/nombre-del-submodulo.git
-```

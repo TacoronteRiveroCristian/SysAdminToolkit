@@ -1,0 +1,89 @@
+networks:
+  default:
+    driver: bridge
+    ipam:
+      driver: default
+
+services:
+  node_exporter:
+    container_name: node_exporter
+    image: prom/node-exporter:v1.8.1
+    ports:
+      - "${NODE_EXPORTER_PORT}:9100"
+    # command:
+    #   - '--path.rootfs=/host'
+    #   - '--collector.filesystem.mount-points-excluded=^/(sys|proc|dev)($$|/)'
+    #   - '--collector.filesystem.ignored-mount-points=^/(sys|proc|dev)($$|/)'
+    # command:
+    #   - --path.procfs=/host/proc
+    #   - --path.sysfs=/host/sys
+    #   - --path.rootfs=/host
+    #   - --collector.filesystem.ignored-mount-points
+    #   - ^/(sys|proc|dev|host|etc|rootfs/var/lib/docker/containers|rootfs/var/lib/docker/overlay2|rootfs/run/docker/netns|rootfs/var/lib/docker/aufs)($$|/)
+    # command:
+    # - '--collector.disable-defaults'
+    # - '--path.procfs=/host/proc'
+    # - '--path.sysfs=/host/sys'
+    # - '--path.rootfs=/host'
+    # - '--collector.filesystem'
+    # - '--collector.cpu'
+    # - '--collector.meminfo'
+    # - '--collector.diskstats'
+    # - '--collector.netdev'
+    # - '--collector.netstat'
+    # - '--collector.loadavg'
+    # - '--collector.vmstat'
+    # - '--collector.thermal_zone'
+    # - '--collector.pressure'
+    volumes:
+      # ro: read-only
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+      - /:/host:ro,rslave
+    restart: unless-stopped
+
+  prometheus:
+    container_name: prometheus
+    image: prom/prometheus:v2.52.0
+    ports:
+      - "${PROMETHEUS_PORT}:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yaml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=${PROMETHEUS_RETENTION_TIME}'
+    volumes:
+      - ./volumes/prometheus/:/etc/prometheus/
+    restart: unless-stopped
+
+  grafana:
+    container_name: grafana
+    image: grafana/grafana:11.0.0
+    ports:
+    - "${GRAFANA_PORT}:3000"
+    volumes:
+    - ./volumes/grafana/dashboards:/var/lib/grafana/dashboards
+    - ./volumes/grafana/provisioning:/etc/grafana/provisioning
+    - ./volumes/grafana/grafana.ini:/etc/grafana/grafana.ini
+    - ./volumes/grafana/data:/var/lib/grafana
+    - ./volumes/grafana/log:/var/log/grafana
+    user: "0"
+    environment:
+      - TZ=Etc/UTC
+      - GF_PATHS_DATA=/var/lib/grafana
+      - GF_PATHS_LOGS=/var/log/grafana
+      - GF_DASHBOARDS_JSON_ENABLED=true
+      - GF_DASHBOARDS_JSON_PATH=/var/lib/grafana/dashboards
+      - GF_SECURITY_ADMIN_USER=${GF_SECURITY_ADMIN_USER}
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD}
+      - GRAFANA_ENABLED_SMTP=${GRAFANA_ENABLED_SMTP}
+      - GRAFANA_HOST_SMTP=${GRAFANA_HOST_SMTP}
+      - GRAFANA_USER_SMTP=${GRAFANA_USER_SMTP}
+      - GRAFANA_PASSWORD_SMTP=${GRAFANA_PASSWORD_SMTP}
+      - GRAFANA_ADDRES_HOST_SMTP=${GRAFANA_ADDRES_HOST_SMTP}
+      - GRAFANA_EMAILS_TO_NOTIFY=${GRAFANA_EMAILS_TO_NOTIFY}
+      - GRAFANA_INTERVAL_ALERT=${GRAFANA_INTERVAL_ALERT}
+      - PROMETHEUS_NAME_DATASOURCE=${PROMETHEUS_NAME_DATASOURCE}
+      - PROMETHEUS_TIME_SCRAP=${PROMETHEUS_TIME_SCRAP}
+      - PROMETHEUS_PORT=${PROMETHEUS_PORT}
+    restart: unless-stopped

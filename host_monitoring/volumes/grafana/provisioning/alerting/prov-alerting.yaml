@@ -1,0 +1,138 @@
+apiVersion: 1
+groups:
+    - orgId: 1
+      name: NodeExporter
+      folder: Provisioning
+      interval: $GRAFANA_INTERVAL_ALERT
+      rules:
+        - uid: cdkaht1vbabk0f
+          title: Alert CPU Idle
+          condition: B
+          data:
+            - refId: A
+              relativeTimeRange:
+                from: 600
+                to: 0
+              datasourceUid: uid-$NAME_DATASOURCE_PROMETHEUS
+              model:
+                editorMode: code
+                expr: sum(irate(node_cpu_seconds_total{mode="idle"}[$__rate_interval])) / scalar(count(count(node_cpu_seconds_total) by (cpu)))
+                instant: true
+                intervalMs: 1000
+                legendFormat: __auto
+                maxDataPoints: 43200
+                range: false
+                refId: A
+            - refId: B
+              datasourceUid: __expr__
+              model:
+                conditions:
+                    - evaluator:
+                        params:
+                            - $GRAFANA_TRESHOLD_CPU_PERCENT
+                            - 0
+                        type: lt
+                      operator:
+                        type: and
+                      query:
+                        params: []
+                      reducer:
+                        params: []
+                        type: avg
+                      type: query
+                      unloadEvaluator:
+                        params:
+                            - $GRAFANA_TRESHOLD_CPU_PERCENT
+                            - 0
+                        type: gt
+                datasource:
+                    name: Expression
+                    type: __expr__
+                    uid: __expr__
+                expression: A
+                intervalMs: 1000
+                maxDataPoints: 43200
+                refId: B
+                type: threshold
+          noDataState: NoData
+          execErrState: Error
+          for: 0m
+          annotations:
+            summary: Alert if CPU usage > 50%
+          labels: {}
+          isPaused: false
+        - uid: cdkaiazn0s45cb
+          title: Alert RAM Used
+          condition: A
+          data:
+            - refId: A
+              relativeTimeRange:
+                from: 600
+                to: 0
+              datasourceUid: uid-$NAME_DATASOURCE_PROMETHEUS
+              model:
+                editorMode: code
+                expr: node_memory_MemFree_bytes < (node_memory_MemTotal_bytes * $GRAFANA_TRESHOLD_RAM_PERCENT)
+                instant: true
+                intervalMs: 1000
+                legendFormat: __auto
+                maxDataPoints: 43200
+                range: false
+                refId: A
+          noDataState: NoData
+          execErrState: Error
+          for: 0m
+          annotations:
+            summary: Alert if RAM usage> 50%
+          labels: {}
+          isPaused: false
+        - uid: fdkaix7ve8jr4e
+          title: Alert Disk Used
+          condition: A
+          data:
+            - refId: A
+              relativeTimeRange:
+                from: 600
+                to: 0
+              datasourceUid: uid-$NAME_DATASOURCE_PROMETHEUS
+              model:
+                editorMode: code
+                expr: node_filesystem_size_bytes{device=~"/dev/.*", mountpoint="/host"} - node_filesystem_avail_bytes{device=~"/dev/.*", mountpoint="/host"} > (node_filesystem_size_bytes{device=~"/dev/.*", mountpoint="/host"} * $GRAFANA_TRESHOLD_DISK_PERCENT)
+                instant: true
+                intervalMs: 1000
+                legendFormat: __auto
+                maxDataPoints: 43200
+                range: false
+                refId: A
+          noDataState: NoData
+          execErrState: Error
+          for: 0m
+          annotations:
+            summary: Alert if Disk usage> 80%
+          labels: {}
+          isPaused: false
+        - uid: cdkajr4kmm6f4d
+          title: Alert Temp Chip
+          condition: A
+          data:
+            - refId: A
+              relativeTimeRange:
+                from: 600
+                to: 0
+              datasourceUid: uid-$NAME_DATASOURCE_PROMETHEUS
+              model:
+                editorMode: code
+                expr: max(node_hwmon_temp_celsius{chip=~"thermal.*|platform.*"}) > $GRAFANA_TRESHOLD_TEMP_CELCIUS
+                instant: true
+                intervalMs: 1000
+                legendFormat: __auto
+                maxDataPoints: 43200
+                range: false
+                refId: A
+          noDataState: NoData
+          execErrState: Error
+          for: 0m
+          annotations:
+            summary: Alert if Temp > 70 ºC
+          labels: {}
+          isPaused: false
