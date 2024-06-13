@@ -1,0 +1,30 @@
+
+services:
+  influxdb:
+    container_name: influxdb
+    image: "influxdb:1.8"
+    ports:
+    - "${INFLUXDB_PORT}:8086"
+    volumes:
+    - ./volumes/influxdb/data:/var/lib/influxdb
+    - ./volumes/influxdb/db:/var/lib/influxdb/backup
+    - ./entrypoint/init-influxdb.sh:/docker-entrypoint-initdb.d/init-influxdb.sh
+    environment:
+      - TZ=Etc/UTC
+      - INFLUXDB_HTTP_AUTH_ENABLED=${INFLUXDB_HTTP_AUTH_ENABLED}  # Habilitar autenticación
+      - INFLUXDB_ADMIN_USER=${INFLUXDB_ADMIN_USER}  # Usuario administrador
+      - INFLUXDB_ADMIN_PASSWORD=${INFLUXDB_ADMIN_PASSWORD}  # Contraseña del administrador
+    entrypoint: ["/docker-entrypoint-initdb.d/init-influxdb.sh"] # Entrypoint para InfluxDB donde crea y configura ususario y contraseña administrador
+    restart: unless-stopped
+
+  telegraf:
+    container_name: telegraf
+    image: telegraf:latest
+    volumes:
+      - ./volumes/telegraf/telegraf.conf:/etc/telegraf/telegraf.conf:ro  # Archivo de configuración de Telegraf
+    environment:
+      - HOST_PROC=/rootfs/proc
+      - HOST_SYS=/rootfs/sys
+      - HOST_ETC=/rootfs/etc
+      - TELEGRAF_NAME_DATABASE=${TELEGRAF_NAME_DATABASE}
+    restart: unless-stopped
