@@ -1,0 +1,23 @@
+{
+    "editor.formatOnSave": true,
+    "python.formatting.provider": "black",
+    "python.linting.enabled": true,
+    "python.linting.pylintEnabled": true,
+    "python.formatting.autopep8Path": "autopep8",
+    "python.formatting.autopep8Args": ["--aggressive", "--aggressive"],
+    "python.sortImports.path": "isort",
+    "python.sortImports.args": ["--profile", "black"],
+    "docwriter.language": "Spanish",
+    "docwriter.progress.trackFunctions": false,
+    "docwriter.style": "Auto-detect",
+    "[python]": {
+        "editor.codeActionsOnSave": {
+            "source.organizeImports": "explicit"
+        },
+        "editor.defaultFormatter": "ms-python.black-formatter",
+        "python.analysis.inlayHints.functionReturnTypes": false,
+        "python.analysis.inlayHints.callArgumentNames": "off",
+        "python.analysis.inlayHints.pytestParameters": false,
+        "python.analysis.inlayHints.variableTypes": false
+    },
+}
