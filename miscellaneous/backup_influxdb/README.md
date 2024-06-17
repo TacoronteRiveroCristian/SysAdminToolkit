@@ -34,8 +34,11 @@ Este script permite realizar copias de seguridad de múltiples bases de datos y 
 1. Asegúrate de que los valores en el archivo `.env` están correctamente configurados:
    - `SOURCE_URL`: URL de la instancia de InfluxDB de origen.
    - `SOURCE_DBS`: Comma-separated list de las bases de datos de origen.
+   - `SOURCE_GROUP_BY`: Periodo de agrupación de los datos a la hora de hacer la query en el servidor de origen.
    - `DEST_URL`: URL de la instancia de InfluxDB de destino.
    - `DEST_DBS`: Comma-separated list de las bases de datos de destino correspondientes.
+   - `TIMEOUT_CLIENT`: Tiempo de respuesta límite para los clientes InfluxDB.
+   - `PYDEVD_THREAD_DUMP_ON_WARN_EVALUATION_TIMEOUT`: Tiempo de respuesta límite para los clientes InfluxDB a la hora de realizar operaciones en las bases de datos.
    - `LOG_FILE`: Nombre del archivo de log.
 
 2. Ejecuta el script:
