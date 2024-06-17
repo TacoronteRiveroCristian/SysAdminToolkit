@@ -318,8 +318,7 @@ if __name__ == "__main__":
                         logger.info(
                             f"\tIntentando paginación para el measurement '{measurement['name']}'..."
                         )
-                        # TODO que comience desde la fecha actual pero tiene que tener como target final el dato mas antiguo
-                        # para que no se quede nada atras
+                        # Obtener la marca de tiempo del primer registro    
                         first_entry_time = get_entry_time(
                             SOURCE_CLIENT,
                             measurement["name"],
@@ -340,6 +339,7 @@ if __name__ == "__main__":
             # Cerrar conexiones con los clientes InfluxDB
             SOURCE_CLIENT.close()
             DEST_CLIENT.close()
+            logger.info("Conexiones clientes InfluxDB cerradas.")
     else:
         logger.error(
             "Abortando proceso de copia de datos debido a problemas de conexión."
