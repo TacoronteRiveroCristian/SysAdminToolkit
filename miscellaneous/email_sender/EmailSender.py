@@ -2,12 +2,6 @@
 Este script permite el envío de correos electrónicos a través del servidor SMTP de Gmail,
 incluyendo la posibilidad de agregar destinatarios en copia oculta (BCC) y adjuntar archivos.
 Las credenciales y configuraciones se cargan desde un archivo .env para mayor seguridad.
-
-Variables esperadas en el archivo .env:
-- SMTP_GMAIL__USER: Dirección de correo de Gmail.
-- SMTP_GMAIL__APP_PASSWORD: Contraseña de la aplicación generada en Gmail.
-- SMTP_GMAIL__FILES: Archivos adjuntos separados por comas.
-- SMTP_GMAIL__LOG_FILE: Ruta del archivo de log.
 """
 
 import logging

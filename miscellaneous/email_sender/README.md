@@ -20,5 +20,6 @@ SMTP_GMAIL__LOG_FILE=/var/log/log_email_sender.log
 ```
 
 ---
+Para obtener la contraseña de aplicación, se debe de ir a los ajustes de la cuenta gmail la cual se quiere emplear como servidor SMTP y activar la doble verificación. Una vez se haya completado ese paso, ya es posible generar contraseñas de aplicaciones.
 
 Para más información de cómo obtener la contraseña de aplicación en España, visite el siguiente link: https://support.google.com/accounts/answer/185833?sjid=466537387126917489-EU
