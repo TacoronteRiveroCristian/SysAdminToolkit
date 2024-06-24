@@ -109,3 +109,17 @@ source $ZSH/oh-my-zsh.sh
 
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
+
+# Definir una función llamada cedc (current env docker compose)
+cedc() {
+  # Exportar las variables de entorno desde el archivo .env
+  # cat .env lee el contenido del archivo .env que se encuentra en el dir actual
+  # xargs toma el contenido del archivo .env y lo convierte en una lista de argumentos
+  # export $(...) exporta las variables de entorno en la sesión actual de la terminal
+  export $(cat .env | xargs)
+
+  # Ejecutar docker-compose con los argumentos proporcionados a la función
+  # "$@" expande todos los parámetros que se le pasaron a la función dcup
+  # Lo normal es pasar el parametro -f path/to/docker-compose.yaml como minimo
+  docker-compose "$@"
+}
