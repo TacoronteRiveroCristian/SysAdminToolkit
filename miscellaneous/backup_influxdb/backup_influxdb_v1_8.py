@@ -16,7 +16,7 @@ del measurement correspondiente.
 import logging
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from dateutil.parser import parse
 from dotenv import load_dotenv
@@ -26,21 +26,26 @@ from influxdb.resultset import ResultSet
 # Cargar variables de entorno
 load_dotenv()
 
-# Configuración de logging
-LOG_FILE = os.getenv("LOG_FILE", "backup_log.log")
+# Constantes
+SOURCE_URL = os.getenv("SOURCE_URL")
+SOURCE_DBS = os.getenv("SOURCE_DBS").split(",") if os.getenv("SOURCE_DBS") else []
+SOURCE_GROUP_BY = os.getenv("SOURCE_GROUP_BY", "5m")
+DEST_URL = os.getenv("DEST_URL")
+DEST_DBS = os.getenv("DEST_DBS").split(",") if os.getenv("DEST_DBS") else []
+DAYS_OF_PAGINATION = (
+    int(os.getenv("DAYS_OF_PAGINATION")) if os.getenv("DAYS_OF_PAGINATION") else 7
+)
+
+PATH_LOG_FILE = os.getenv("LOG_FILE")
+
+TIMEOUT_CLIENT = int(os.getenv("TIMEOUT_CLIENT")) if os.getenv("TIMEOUT_CLIENT") else 20
+
 logging.basicConfig(
-    filename=LOG_FILE,
+    filename=PATH_LOG_FILE,
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
-
-# Parámetros de InfluxDB
-SOURCE_URL = os.getenv("SOURCE_URL")
-SOURCE_DBS = os.getenv("SOURCE_DBS").split(",")
-SOURCE_GROUP_BY = os.getenv("SOURCE_GROUP_BY", "5m")
-DEST_URL = os.getenv("DEST_URL")
-DEST_DBS = os.getenv("DEST_DBS").split(",")
 
 # Verificar que las listas de bases de datos de origen y destino tengan la misma longitud
 # ya que cada base de datos "source" sera la correspondiente para la base de datos "dest"
@@ -60,7 +65,7 @@ SOURCE_CLIENT = InfluxDBClient(
     ),
     username=os.getenv("SOURCE_USER"),
     password=os.getenv("SOURCE_PASSWORD"),
-    timeout=int(os.getenv("TIMEOUT_CLIENT")),
+    timeout=TIMEOUT_CLIENT,
 )
 DEST_CLIENT = InfluxDBClient(
     host=DEST_URL.split(":")[1].replace("//", ""),
@@ -69,7 +74,7 @@ DEST_CLIENT = InfluxDBClient(
     ),
     username=os.getenv("DEST_USER"),
     password=os.getenv("DEST_PASSWORD"),
-    timeout=int(os.getenv("TIMEOUT_CLIENT")),
+    timeout=TIMEOUT_CLIENT,
 )
 
 
@@ -124,7 +129,76 @@ def get_entry_time(
         return None
 
 
-def build_list_points(result: ResultSet, measurement: str) -> List[Dict[str, Any]]:
+def filter_non_numeric_values(
+    _point: Dict[str, Any], float_selector: bool
+) -> Dict[str, Union[int, float]]:
+    """
+    Filtra los campos de un punto de datos dejando solo aquellos que son números (int o float)
+    y que no son de tipo "time". Si float_selector es True, se filtran solo los campos de tipo float.
+    Si float_selector es False, se filtran solo los campos de tipo str o bool.
+
+    :param _point: El punto de datos a filtrar.
+    :type _point: Dict[str, Any]
+    :param float_selector: Si es True, se filtrarán solo los campos de tipo float.
+                           Si es False, se filtrarán solo los campos de tipo str o bool.
+    :type float_selector: bool
+    :return: Un nuevo diccionario con los campos filtrados.
+    :rtype: Dict[str, Union[int, float]]
+    """
+    filtered_fields = {}
+    if float_selector:
+        for key, value in _point.items():
+            if value is not None and key != "time" and isinstance(value, (int, float)):
+                filtered_fields[key.replace("last_", "").replace("mean_", "")] = value
+    else:
+        for key, value in _point.items():
+            if value is not None and key != "time" and isinstance(value, (str, bool)):
+                filtered_fields[key.replace("last_", "").replace("mean_", "")] = value
+    return filtered_fields
+
+
+def combine_records_by_time(
+    points_float: List[Dict[str, Any]], points_no_float: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """
+    Combina registros de dos listas de puntos en una lista de puntos,
+    combinando los campos de las dos listas en función de la marca de tiempo.
+
+    :param points_float: La lista de puntos con campos de tipo float.
+    :type points_float: List[Dict[str, Any]]
+    :param points_no_float: La lista de puntos con campos de tipo no float.
+    :type points_no_float: List[Dict[str, Any]]
+    :return: La lista combinada de puntos.
+    :rtype: List[Dict[str, Any]]
+    """
+    combined_points = []
+
+    # Convertir las listas a diccionarios indexados por 'time'
+    float_dict = {record["time"]: record for record in points_float}
+    no_float_dict = {record["time"]: record for record in points_no_float}
+
+    for time, float_record in float_dict.items():
+        if time in no_float_dict:
+            combined_fields = {
+                **float_record["fields"],
+                **no_float_dict[time]["fields"],
+            }
+        else:
+            combined_fields = float_record["fields"]
+
+        combined_record = {
+            "time": time,
+            "measurement": float_record["measurement"],
+            "fields": combined_fields,
+        }
+        combined_points.append(combined_record)
+
+    return combined_points
+
+
+def build_list_points(
+    result: ResultSet, measurement: str, float_selector: bool
+) -> List[Dict[str, Any]]:
     """
     Construye una lista de puntos desde el resultado de una consulta de InfluxDB.
 
@@ -138,15 +212,11 @@ def build_list_points(result: ResultSet, measurement: str) -> List[Dict[str, Any
     points = []
     for _, series in result.items():
         for _point in series:
-            # Crear lista de puntos
+            # Crear lista de puntos, donde se seleccionar o valores numericos o valores bool/str
             point = {
                 "time": _point["time"],
                 "measurement": measurement,
-                "fields": {
-                    key.replace("mean_", ""): value
-                    for key, value in _point.items()
-                    if value is not None and key != "time"
-                },
+                "fields": filter_non_numeric_values(_point, float_selector),
             }
             # Comprobar que el diccionario de valores no este vacío
             if len(point["fields"]) > 0:
@@ -183,20 +253,31 @@ def copy_data_since_last_entry(
         section_last_entry_time = f"WHERE time >= '{last_entry_time}'"
     else:
         section_last_entry_time = ""
-    query = f"SELECT MEAN(*) FROM {measurement} {section_last_entry_time} GROUP BY time({group_by})"
+    query_float = f"SELECT MEAN(*) FROM {measurement} {section_last_entry_time} GROUP BY time({group_by})"
+    query_no_float = f"SELECT LAST(*) FROM {measurement} {section_last_entry_time} GROUP BY time({group_by})"
     try:
         logger.info(
             f"\tIniciando copia de seguridad para el measurement '{measurement}'."
         )
         # Ejecutar query
-        result = source_client.query(query)
+        result_float = source_client.query(query_float)
+        result_no_float = source_client.query(query_no_float)
         # Obtener lista de puntos
-        points = build_list_points(result, measurement)
-        # Cpomprobar si la lista no es nula. Si es cierto, registrar los datos en el servidor de destino
+        points_float = build_list_points(result_float, measurement, True)
+        points_no_float = build_list_points(result_no_float, measurement, False)
+
+        # Combinar puntos tantos numericos como no numericos
+        points = combine_records_by_time(points_float, points_no_float)
+
+        # Comprobar si la lista no es nula. Si es cierto, registrar los datos en el servidor de destino
         if points:
             dest_client.write_points(points, batch_size=5000)
+            if last_entry_time:
+                txt_interval_time = f"la marca de tiempo {last_entry_time}"
+            else:
+                txt_interval_time = "el inicio de la base de datos"
             logger.info(
-                f"\tDatos del measurement '{measurement}' copiados exitosamente desde la marca de tiempo '{last_entry_time}' (puntos registrados: {len(points)})."
+                f"\tDatos del measurement '{measurement}' copiados exitosamente desde {txt_interval_time} (puntos registrados: {len(points)})."
             )
         # Devuelve True si no se ha generado ningun error
         return True
@@ -219,17 +300,33 @@ def copy_data_with_pagination(
     measurement: str,
     group_by: str,
 ) -> bool:
-    """ """
+    """
+    Copia los datos de un measurement de una base de datos de InfluxDB a otra, utilizando una paginación
+    de un mes hacia atrás.
+
+    :param source_client: El cliente de InfluxDB de la base de datos de origen.
+    :type source_client: InfluxDBClient
+    :param dest_client: El cliente de InfluxDB de la base de datos de destino.
+    :type dest_client: InfluxDBClient
+    :param first_entry_time: La marca de tiempo del primer registro a copiar (opcional).
+    :type first_entry_time: str
+    :param measurement: El nombre del measurement a copiar.
+    :type measurement: str
+    :param group_by: El valor de agrupación de tiempo.
+    :type group_by: str
+    :return: Ninguno.
+    :rtype: None
+    """
     str_format_datetime_query = "%Y-%m-%dT%H:%M:%SZ"
     str_format_datetime_log = "%Y-%m-%dT%H:%M:%SZ"
-    days_timedelta = 7
+    days_timedelta = DAYS_OF_PAGINATION
     try:
         # Fecha de inicio (hacia atras)
         start_date = datetime.now(timezone.utc)
         # Fecha de fin (hacia atras)
         end_date = start_date - timedelta(days=days_timedelta)
 
-        # Transformar fecha del primer registro y crear la expresion de paginacion
+        # Transformar fecha del primer registro y crear la expresión de paginacion
         if first_entry_time:
             first_entry_time = datetime.strptime(
                 first_entry_time, "%Y-%m-%dT%H:%M:%SZ"
@@ -242,8 +339,13 @@ def copy_data_with_pagination(
         cum_points = 0
         while cond_pagination:
             # Construir query dinámica
-            query = (
+            query_float = (
                 f"SELECT MEAN(*) FROM {measurement} "
+                f"WHERE time >= '{end_date.strftime(str_format_datetime_query)}' AND time < '{start_date.strftime(str_format_datetime_query)}' "
+                f"GROUP BY time({group_by})"
+            )
+            query_no_float = (
+                f"SELECT LAST(*) FROM {measurement} "
                 f"WHERE time >= '{end_date.strftime(str_format_datetime_query)}' AND time < '{start_date.strftime(str_format_datetime_query)}' "
                 f"GROUP BY time({group_by})"
             )
@@ -252,9 +354,14 @@ def copy_data_with_pagination(
             )
 
             # Ejecutar query
-            result = source_client.query(query)
+            result_float = source_client.query(query_float)
+            result_no_float = source_client.query(query_no_float)
             # Obtener lista de puntos
-            points = build_list_points(result, measurement)
+            points_float = build_list_points(result_float, measurement, True)
+            points_no_float = build_list_points(result_no_float, measurement, False)
+
+            # Combinar puntos tantos numericos como no numericos
+            points = combine_records_by_time(points_float, points_no_float)
             # Comprobar si la lista no es nula. Si es cierto, registrar los datos en el servidor de destino
             if points:
                 cum_points += len(points)
@@ -282,18 +389,29 @@ def copy_data_with_pagination(
 if __name__ == "__main__":
     # Verificar la conexión de cada cliente
     if check_connection(SOURCE_CLIENT) and check_connection(DEST_CLIENT):
+        logger.info(
+            f"Parametros del proceso: group by = {SOURCE_GROUP_BY} | days of pagination = {DAYS_OF_PAGINATION} | timeout = {int(os.getenv('TIMEOUT_CLIENT'))}"
+        )
         try:
-            # Recorrer cada base de datos
+            # Si la longitud de SOURCE_DBS esta vacia, es que se desea copiar todas las bases de datos
+            if len(SOURCE_DBS) == 0:
+                SOURCE_DBS = [k.get("name") for k in SOURCE_CLIENT.get_list_database()]
+                # Eliminar la base de dato _internal
+                if "_internal" in SOURCE_DBS:
+                    SOURCE_DBS.remove("_internal")
+                # Replicar bases de datos destino
+                DEST_DBS = SOURCE_DBS
+            # Recorrer cada base de datow
             for source_db, dest_db in zip(SOURCE_DBS, DEST_DBS):
                 # Apuntar a la base de datos correspondiente
                 SOURCE_CLIENT.switch_database(source_db)
-                logger.info(
-                    f"Iniciando copia de datos de '{SOURCE_CLIENT._host}:{source_db}' a '{DEST_CLIENT._host}:{dest_db}'."
-                )
                 # Recorrer cada measurement
                 for measurement in SOURCE_CLIENT.get_list_measurements():
-                    if measurement["name"] == "CONTENEDOR_NON_STANDARD":
+                    if measurement["name"] == "StorageSystem":
                         pass
+                    logger.info(
+                        f"Iniciando copia de datos de '{SOURCE_CLIENT._host}:{SOURCE_CLIENT._port}/{source_db}' a '{DEST_CLIENT._host}:{DEST_CLIENT._port}/{dest_db}'."
+                    )
                     # Crear la base de datos si no existe y apuntar a la base de datos correspondiente
                     DEST_CLIENT.create_database(dest_db)
                     DEST_CLIENT.switch_database(dest_db)
@@ -318,7 +436,7 @@ if __name__ == "__main__":
                         logger.info(
                             f"\tIntentando paginación para el measurement '{measurement['name']}'..."
                         )
-                        # Obtener la marca de tiempo del primer registro    
+                        # Obtener la marca de tiempo del primer registro
                         first_entry_time = get_entry_time(
                             SOURCE_CLIENT,
                             measurement["name"],
@@ -339,8 +457,8 @@ if __name__ == "__main__":
             # Cerrar conexiones con los clientes InfluxDB
             SOURCE_CLIENT.close()
             DEST_CLIENT.close()
-            logger.info("Conexiones clientes InfluxDB cerradas.")
+            logger.info("Conexiones clientes InfluxDB cerradas.\n")
     else:
         logger.error(
-            "Abortando proceso de copia de datos debido a problemas de conexión."
+            "Abortando proceso de copia de datos debido a problemas de conexión.\n"
         )
