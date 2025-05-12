@@ -1,0 +1,63 @@
+# Load variables from .env file
+# Create this file by copying src/.env-example to .env and modifying as needed
+
+services:
+  # InfluxDB server for development/testing
+  influxdb:
+    image: influxdb:1.8
+    container_name: sysadmintoolkit-influxdb
+    ports:
+      - "8086:8086"
+    environment:
+      - INFLUXDB_DB=metrics
+      - INFLUXDB_HTTP_AUTH_ENABLED=false
+    volumes:
+      - ./volumes/influxdb_data:/var/lib/influxdb
+    profiles:
+      - development
+    networks:
+      - backup_network
+
+  # Backup service
+  backup-service:
+    container_name: sysadmintoolkit-backup-service
+    build:
+      context: .
+      dockerfile: backup_influxdb.dockerfile
+    # Environment variables are loaded from .env file
+    # and can be overridden here if needed
+    environment:
+      - SOURCE_URL=${SOURCE_URL:-http://source-influxdb:8086}
+      - SOURCE_DBS=${SOURCE_DBS:-metrics}
+      - SOURCE_USER=${SOURCE_USER:-}
+      - SOURCE_PASSWORD=${SOURCE_PASSWORD:-}
+      - SOURCE_GROUP_BY=${SOURCE_GROUP_BY:-5m}
+      - DEST_URL=${DEST_URL:-http://influxdb:8086}
+      - DEST_DBS=${DEST_DBS:-metrics_backup}
+      - DEST_USER=${DEST_USER:-}
+      - DEST_PASSWORD=${DEST_PASSWORD:-}
+      - MEASUREMENTS=${MEASUREMENTS:-}
+      - TIMEOUT_CLIENT=${TIMEOUT_CLIENT:-20}
+      - DAYS_OF_PAGINATION=${DAYS_OF_PAGINATION:-7}
+      - LOG_FILE=${LOG_FILE:-/var/log/backup_influxdb/backup.log}
+      - BACKUP_SCHEDULE=${BACKUP_SCHEDULE:-}
+    volumes:
+      - ./volumes/backup_logs:/var/log/backup_influxdb
+    depends_on:
+      - influxdb
+    profiles:
+      - development
+      - production
+    networks:
+      - backup_network
+    command: >
+      sh -c "if [ -n \"$$BACKUP_SCHEDULE\" ]; then
+               python /app/backup_influxdb_cron.py;
+             else
+               python /app/backup_influxdb.py;
+             fi"
+
+networks:
+  backup_network:
+    driver: bridge
+    name: ${INFLUXDB_NETWORK:-influxdb_network}

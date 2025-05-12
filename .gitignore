@@ -2,3 +2,5 @@
 **/log/
 *.log
 tests/
+.env
+**/meta.db
