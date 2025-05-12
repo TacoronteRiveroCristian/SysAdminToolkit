@@ -1,0 +1,164 @@
+# InfluxDB Backup Configuration
+# -------------------------
+# Este archivo contiene TODA la configuración para el servicio de backup de InfluxDB.
+# Copia este archivo a backup_config.yaml y personalízalo según tus necesidades.
+
+# Configuración global
+global:
+  # Red Docker para contenedores
+  # Ejemplo: 'influxdb_network' - Debe coincidir con la red donde están los contenedores de InfluxDB
+  # Si los contenedores están en diferentes redes, crea una red compartida con:
+  # docker network create influxdb_network
+  network: influxdb_network
+
+# Configuración InfluxDB origen
+source:
+  # URL del servidor InfluxDB origen (requerido)
+  # Formato: http://hostname:puerto
+  # Ejemplo: 'http://source-influxdb:8086' para contenedor Docker
+  # Ejemplo: 'http://192.168.1.100:8086' para servidor remoto
+  url: http://source-influxdb:8086
+
+  # Lista de bases de datos a respaldar
+  # Cada entrada debe tener:
+  #   - name: Nombre de la base de datos en el origen
+  #   - destination: Nombre que tendrá en el destino (puede ser el mismo)
+  # Ejemplo: Para respaldar solo la DB 'telegraf' con el mismo nombre:
+  # databases:
+  #   - name: telegraf
+  #     destination: telegraf
+  #   - name: database_2
+  #     destination: database_2
+  databases:
+    - name: metrics
+      destination: metrics_backup
+    - name: telegraf
+      destination: telegraf_backup
+
+  # Autenticación (si es necesaria)
+  # Deja en blanco si no se requiere autenticación
+  # Para InfluxDB con autenticación habilitada:
+  # user: "admin"
+  # password: "password123"
+  user: ""
+  password: ""
+
+  # Periodo de tiempo para agrupar datos en consultas
+  # Valores comunes: 30s, 1m, 5m, 1h
+  # Valores más pequeños reducen el uso de memoria pero aumentan el número de consultas
+  # Valores más grandes son más rápidos pero consumen más memoria
+  # Para NO usar agrupamiento, puedes:
+  # - Dejarlo completamente vacío: group_by:
+  # - O usar comillas vacías: group_by: ""
+  # NOTA: La paginación (para conjuntos grandes de datos) REQUIERE un valor válido.
+  # Si los datos abarcan más días que 'days_of_pagination', debes especificar un valor.
+  group_by: "5m"
+
+# Configuración InfluxDB destino
+destination:
+  # URL del servidor InfluxDB destino (requerido)
+  # Formato: http://hostname:puerto
+  # Puede ser el mismo servidor que el origen (usando otra base de datos)
+  # o un servidor completamente diferente
+  url: http://destination-influxdb:8086
+
+  # Autenticación (si es necesaria)
+  # Configura según los requisitos del servidor destino
+  user: ""
+  password: ""
+
+# Configuración de filtrado de mediciones
+measurements:
+  # Listas globales de inclusión/exclusión para mediciones
+  # Hay dos formas de usar estas listas:
+
+  # OPCIÓN 1: Incluir mediciones específicas
+  # Si 'include' tiene elementos, SOLO esas mediciones serán respaldadas
+  # En este caso, 'exclude' es ignorado y no es necesario configurarlo
+  # Ejemplo: include: [cpu, memory, disk] - Solo respaldar estas 3 mediciones
+
+  # OPCIÓN 2: Excluir mediciones específicas
+  # Si 'include' está vacío, TODAS las mediciones serán respaldadas EXCEPTO
+  # las que estén en la lista 'exclude'
+  # Ejemplo: include: [] y exclude: [windows_services, logs]
+  # Útil cuando tienes muchas mediciones y solo quieres excluir algunas pocas
+
+  # Lista de mediciones a incluir (vacío = incluir todas excepto las excluidas)
+  include: []
+
+  # Lista de mediciones a excluir (solo se aplica si 'include' está vacío)
+  exclude: []
+
+  # Configuraciones específicas por medición
+  # Estas sobrescriben la configuración global para mediciones individuales
+  # NOTA: Si borras toda esta sección 'specific' o la dejas vacía (specific: {}),
+  # el sistema respaldará TODAS las mediciones según las reglas de include/exclude globales
+  # y respaldará TODOS los campos de cada medición sin filtrar.
+  specific:
+    # Ejemplo: Configuración medición CPU - Sólo campos específicos
+    cpu:
+      fields:
+        # Campos a incluir (vacío significa todos)
+        # Ejemplo práctico: Solo nos interesan los datos de uso, no métricas detalladas
+        include: [usage_user, usage_system, usage_idle]
+        # Campos a excluir (aplicado después de incluir)
+        exclude: []
+        # Tipos a incluir: 'numeric', 'string', 'boolean'
+        # Aquí aceptamos cualquier tipo de datos para estos campos
+        types: [numeric, string, boolean]
+
+    # Ejemplo: Configuración medición Memory - Excluir campos específicos
+    memory:
+      fields:
+        # Incluir todos los campos (lista vacía)
+        include: []
+        # Excluir campos específicos (por ejemplo, campos que no son relevantes)
+        # Ejemplo práctico: No queremos datos de buffer/cache que cambian constantemente
+        exclude: [buffer, cached]
+        # Solo datos numéricos y cadenas
+        types: [numeric, string]
+
+    # Ejemplo: Configuración medición Disk - Solo datos numéricos
+    disk:
+      fields:
+        # Ejemplo práctico: Solo nos interesan métricas numéricas para discos
+        # Ignoramos etiquetas y valores booleanos
+        types: [numeric]
+
+# Opciones de backup
+options:
+  # Timeout del cliente en segundos
+  # Tiempo máximo de espera para conexiones HTTP
+  # Aumenta este valor si tienes conexiones lentas o conjuntos de datos grandes
+  timeout_client: 20
+
+  # Días para dividir los datos al paginar conjuntos grandes
+  # Para bases de datos muy grandes, este valor divide las consultas por días
+  # para evitar problemas de memoria
+  # Ejemplo:
+  # - Valor 1: procesa datos día por día (más seguro para bases grandes, más lento)
+  # - Valor 30: procesa datos en chunks de 30 días (más rápido, requiere más memoria)
+  days_of_pagination: 7
+
+  # Ruta al archivo de log
+  # Asegúrate de que esta ruta exista y tenga permisos de escritura
+  # Para Docker: esta ruta es DENTRO del contenedor, considera usar un volumen
+  log_file: /var/log/backup_influxdb/backup.log
+
+  # Nivel de log: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  # DEBUG: muestra información detallada para depuración
+  # INFO: información general sobre la ejecución (recomendado)
+  # WARNING: solo advertencias y errores
+  # ERROR: solo errores
+  # CRITICAL: solo errores críticos
+  log_level: INFO
+
+  # Expresión cron para backups programados
+  # Dejar vacío para backup único bajo demanda
+  # Ejemplos comunes:
+  # "0 0 * * *"     - Diario a medianoche
+  # "0 0 * * 0"     - Semanal (domingo a medianoche)
+  # "0 0 1 * *"     - Mensual (día 1 a medianoche)
+  # "0 */6 * * *"   - Cada 6 horas
+  # "0 8-18 * * 1-5" - Cada hora en horario laboral L-V
+  backup_schedule: ""

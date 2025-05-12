@@ -12,6 +12,7 @@ This service allows you to:
 - Handle incremental backups (only copying new data since last backup)
 - Run in development mode (with local InfluxDB) or production mode
 - Smart handling of different data types (numeric, string, boolean)
+- Granular control over measurements and fields using YAML configuration
 
 ## Architecture
 
@@ -28,9 +29,9 @@ The project has the following key files:
 - `backup_influxdb.dockerfile`: Docker image definition for the backup service
 - `src/backup_influxdb.py`: Main backup script that copies data from source to destination
 - `src/backup_influxdb_cron.py`: Script that sets up cron jobs for scheduled backups
-- `src/conf.py`: Configuration module that loads and validates environment variables
+- `src/conf.py`: Configuration module that loads and validates YAML configuration
 - `src/requirements.txt`: Python dependencies
-- `.env-example`: Example environment variables file
+- `backup_config.yaml.template`: Template for YAML-based configuration with all available options
 
 ## Deployment Options
 
@@ -48,10 +49,8 @@ services:
     build:
       context: .
       dockerfile: backup_influxdb.dockerfile
-    environment:
-      - SOURCE_URL=http://source-influxdb:8086
-      - DEST_URL=http://influxdb:8086
-      # Other configuration variables
+    volumes:
+      - ./backup_config.yaml:/app/backup_config.yaml
     depends_on:
       - influxdb
     ...
@@ -66,70 +65,152 @@ services:
     build:
       context: .
       dockerfile: backup_influxdb.dockerfile
-    environment:
-      - SOURCE_URL=http://source-influxdb:8086
-      - DEST_URL=http://destination-influxdb:8086
-      # Other configuration variables
+    volumes:
+      - ./backup_config.yaml:/app/backup_config.yaml
     ...
 ```
 
-## Configuration Options
+## Configuration
 
-| Variable | Description | Default | Required |
-|----------|-------------|---------|----------|
-| SOURCE_URL | URL of source InfluxDB server | - | Yes |
-| SOURCE_DBS | Comma-separated list of source databases | - | Yes |
-| SOURCE_USER | Source InfluxDB username | - | No |
-| SOURCE_PASSWORD | Source InfluxDB password | - | No |
-| SOURCE_GROUP_BY | Time period for grouping data in queries | 5m | No |
-| DEST_URL | URL of destination InfluxDB server | - | Yes |
-| DEST_DBS | Comma-separated list of destination databases | - | Yes |
-| DEST_USER | Destination InfluxDB username | - | No |
-| DEST_PASSWORD | Destination InfluxDB password | - | No |
-| MEASUREMENTS | Comma-separated list of measurements to back up | All | No |
-| TIMEOUT_CLIENT | Timeout for InfluxDB client operations in seconds | 20 | No |
-| DAYS_OF_PAGINATION | Days to split backup into when dealing with large datasets | 7 | No |
-| LOG_FILE | Path to log file | /var/log/backup_influxdb/backup.log | No |
-| LOG_LEVEL | Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL) | INFO | No |
-| BACKUP_SCHEDULE | Cron expression for scheduled backups | - | No |
-| INFLUXDB_NETWORK | Name of the Docker network | influxdb_network | No |
+The service uses a **single YAML configuration file** for all settings. This approach centralizes all configuration in one well-structured file, providing maximum flexibility.
 
-## Environment File
+### Setting Up Configuration
 
-You can use a `.env` file to configure the service. An example `.env-example` file is provided. Copy this file to the main directory as `.env` and modify as needed:
+1. Copy the template file:
+   ```bash
+   cp backup_config.yaml.template backup_config.yaml
+   ```
 
-```bash
-# Copy the example file
-cp .env-example .env
+2. Edit the configuration file:
+   ```bash
+   nano backup_config.yaml
+   ```
 
-# Edit with your configuration
-nano .env
+3. Mount the configuration file when running the container:
+   ```yaml
+   volumes:
+     - ./backup_config.yaml:/app/backup_config.yaml
+   ```
+
+### Configuration Structure
+
+The YAML file is organized into sections:
+
+```yaml
+# Global settings
+global:
+  network: influxdb_network
+
+# Source database configuration
+source:
+  url: http://source-influxdb:8086
+  databases:
+    - name: metrics
+      destination: metrics_backup
+  # ...more settings
+
+# Destination database configuration
+destination:
+  url: http://destination-influxdb:8086
+  # ...more settings
+
+# Measurements filtering configuration
+measurements:
+  include: [cpu, memory]
+  exclude: [system]
+  specific:
+    cpu:
+      fields:
+        include: [usage_user, usage_system]
+        # ...more settings
+
+# Options like logging, scheduling, etc.
+options:
+  timeout_client: 20
+  days_of_pagination: 7
+  log_file: /var/log/backup_influxdb/backup.log
+  log_level: INFO
+  backup_schedule: "0 0 * * *"  # cron expression
 ```
 
-Example `.env` content:
+### Example Configuration
 
-```ini
-# Source InfluxDB
-SOURCE_URL=http://source-influxdb:8086
-SOURCE_DBS=metrics,telegraf
-SOURCE_USER=
-SOURCE_PASSWORD=
-SOURCE_GROUP_BY=5m
+Here's a complete example:
 
-# Destination InfluxDB
-DEST_URL=http://destination-influxdb:8086
-DEST_DBS=metrics_backup,telegraf_backup
-DEST_USER=
-DEST_PASSWORD=
+```yaml
+global:
+  network: influxdb_network
 
-# Backup Options
-MEASUREMENTS=
-TIMEOUT_CLIENT=20
-DAYS_OF_PAGINATION=7
+source:
+  url: http://source-influxdb:8086
+  databases:
+    - name: metrics
+      destination: metrics_backup
+    - name: telegraf
+      destination: telegraf_backup
+  user: admin
+  password: password
+  group_by: 5m
 
-# Scheduling
-# BACKUP_SCHEDULE=0 0 * * *  # Daily at midnight
+destination:
+  url: http://destination-influxdb:8086
+  user: admin
+  password: password
+
+measurements:
+  include: [cpu, memory, disk]
+  exclude: [system]
+
+  specific:
+    cpu:
+      fields:
+        include: [usage_user, usage_system, usage_idle]
+        types: [numeric, string, boolean]
+
+    memory:
+      fields:
+        exclude: [buffer, cached]
+        types: [numeric, string]
+
+    disk:
+      fields:
+        types: [numeric]
+
+options:
+  timeout_client: 30
+  days_of_pagination: 7
+  log_file: /var/log/backup_influxdb/backup.log
+  log_level: INFO
+  backup_schedule: "0 */6 * * *"
 ```
+
+### Advanced Field Selection
+
+You can precisely control which fields are backed up for each measurement:
+
+1. **Include/Exclude Fields**: Specify exact fields to include or exclude
+   ```yaml
+   cpu:
+     fields:
+       include: [usage_user, usage_system]  # Only these fields
+   ```
+
+2. **Filter by Data Type**: Specify which types of data to copy
+   ```yaml
+   disk:
+     fields:
+       types: [numeric]  # Only numeric fields, no strings or booleans
+   ```
+
+3. **Combine Filters**: Apply multiple filtering rules
+   ```yaml
+   memory:
+     fields:
+       include: [used_percent]
+       types: [numeric]  # Only numeric fields from the include list
+   ```
+
+This granular control allows you to reduce the amount of data transferred and stored, focusing only on the fields that matter to your use case.
 
 ## Data Type Handling
 
@@ -173,12 +254,14 @@ The backup service has sophisticated handling for different data types:
 
 3. **Measurement Processing**
    - For each measurement:
+     - Apply inclusion/exclusion filters from configuration
      - Check last entry time in destination (for incremental backup)
      - If first backup, use pagination to handle large datasets
 
 4. **Data Extraction and Transformation**
    - Query source data since last entry or in paginated chunks
    - Process numeric and non-numeric fields separately
+     - Apply field inclusion/exclusion filters from configuration
      - Numeric fields: Filter out NaN and infinite values
      - Non-numeric fields: Handle strings and booleans
    - Combine records with the same timestamp
@@ -206,7 +289,7 @@ The service implements a smart incremental backup approach:
 
 3. **Pagination for Large Datasets**
    - Automatically splits large datasets into manageable chunks
-   - Default is 7-day chunks, configurable via `DAYS_OF_PAGINATION`
+   - Default is 7-day chunks, configurable via `days_of_pagination` in YAML
    - Helps prevent memory issues with large datasets
 
 ## Scheduling
@@ -214,12 +297,12 @@ The service implements a smart incremental backup approach:
 Two modes of operation are supported:
 
 ### On-Demand Backup
-- Run the container without a schedule to perform a one-time backup
-- The container will exit after the backup completes
+- Set `backup_schedule: ""` in YAML
+- The container will perform a one-time backup and exit
 
 ### Scheduled Backup
-- Set `BACKUP_SCHEDULE` environment variable with a cron expression
-- Uses standard cron syntax (e.g., `0 */6 * * *` for every 6 hours)
+- Set `backup_schedule` with a cron expression in YAML
+- Example: `backup_schedule: "0 */6 * * *"` for every 6 hours
 - The scheduler will:
   1. Run an immediate backup on startup
   2. Set up the cron job with the specified schedule
@@ -230,9 +313,9 @@ Two modes of operation are supported:
 
 Comprehensive logging is implemented:
 
-- Logs are written to both a file (`LOG_FILE`) and the console
-- Log level is configurable via `LOG_LEVEL`
-- For Docker deployments, logs are stored in `/var/log/backup_influxdb/`
+- Logs are written to both a file and the console
+- Log level is configurable via `log_level` in YAML
+- For Docker deployments, logs are stored in a mounted volume
 - The log format includes timestamps, log level, and detailed messages
 - Logs include information about:
   - Connection status
@@ -244,7 +327,11 @@ Comprehensive logging is implemented:
 ## Getting Started
 
 1. Clone this repository
-2. Create and configure a `.env` file (see above)
+2. Create your configuration file:
+   ```bash
+   cp backup_config.yaml.template backup_config.yaml
+   nano backup_config.yaml
+   ```
 3. Run with Docker Compose:
 
 ```bash
@@ -257,26 +344,42 @@ docker-compose --profile production up -d
 
 ## Usage Examples
 
-### Backing up specific measurements
+### Basic Backup
 
 ```yaml
-environment:
-  - SOURCE_URL=http://source-influxdb:8086
-  - SOURCE_DBS=metrics
-  - DEST_URL=http://backup-influxdb:8086
-  - DEST_DBS=metrics_backup
-  - MEASUREMENTS=cpu,memory,disk
+# backup_config.yaml
+source:
+  url: http://source-influxdb:8086
+  databases:
+    - name: metrics
+      destination: metrics_backup
+
+destination:
+  url: http://destination-influxdb:8086
+```
+
+### Advanced Field Filtering
+
+```yaml
+# backup_config.yaml
+# ... other configuration ...
+measurements:
+  specific:
+    cpu:
+      fields:
+        include: [usage_user, usage_system, usage_idle]
+    memory:
+      fields:
+        include: [used_percent, available, free]
 ```
 
 ### Running scheduled backups
 
 ```yaml
-environment:
-  - SOURCE_URL=http://source-influxdb:8086
-  - SOURCE_DBS=metrics
-  - DEST_URL=http://backup-influxdb:8086
-  - DEST_DBS=metrics_backup
-  - BACKUP_SCHEDULE=0 */6 * * *  # Every 6 hours
+# backup_config.yaml
+# ... other configuration ...
+options:
+  backup_schedule: "0 */6 * * *"  # Every 6 hours
 ```
 
 ### Direct Python Script Usage
@@ -288,26 +391,25 @@ You can use the Python scripts directly outside of Docker if needed:
    pip install -r src/requirements.txt
    ```
 
-2. Set environment variables and run:
+2. Create a configuration file and run:
    ```bash
-   export SOURCE_URL=http://source-influxdb:8086
-   export SOURCE_DBS=metrics
-   export DEST_URL=http://destination-influxdb:8086
-   export DEST_DBS=metrics_backup
-   python src/backup_influxdb.py
+   cp backup_config.yaml.template backup_config.yaml
+   # Edit the configuration file
+   BACKUP_CONFIG_PATH=./backup_config.yaml python src/backup_influxdb.py
    ```
 
 ## Troubleshooting
 
 ### Common Issues
 
-- **Connection Failures**: Verify network connectivity and credentials
+- **Connection Failures**: Verify network connectivity and credentials in your YAML
 - **Missing Data**: Check if fields contain NaN or infinite values being filtered
-- **Memory Issues**: Lower the `DAYS_OF_PAGINATION` value for very large datasets
-- **Container Exits**: Ensure `BACKUP_SCHEDULE` is set for continuous operation
+- **Memory Issues**: Lower the `days_of_pagination` value for very large datasets
+- **Container Exits**: Make sure your `backup_schedule` setting is valid if you want continuous operation
+- **Missing Fields**: Check your YAML configuration for field inclusions/exclusions
 
 ### Debugging
 
-- Set `LOG_LEVEL=DEBUG` for more detailed logs
+- Set `log_level: DEBUG` in your YAML for more detailed logs
 - Examine the backup logs in the mounted volume
 - Run in development mode to test with a local InfluxDB instance

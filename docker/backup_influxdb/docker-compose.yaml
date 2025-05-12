@@ -26,22 +26,8 @@ services:
       dockerfile: backup_influxdb.dockerfile
     # Environment variables are loaded from .env file
     # and can be overridden here if needed
-    environment:
-      - SOURCE_URL=${SOURCE_URL:-http://source-influxdb:8086}
-      - SOURCE_DBS=${SOURCE_DBS:-metrics}
-      - SOURCE_USER=${SOURCE_USER:-}
-      - SOURCE_PASSWORD=${SOURCE_PASSWORD:-}
-      - SOURCE_GROUP_BY=${SOURCE_GROUP_BY:-5m}
-      - DEST_URL=${DEST_URL:-http://influxdb:8086}
-      - DEST_DBS=${DEST_DBS:-metrics_backup}
-      - DEST_USER=${DEST_USER:-}
-      - DEST_PASSWORD=${DEST_PASSWORD:-}
-      - MEASUREMENTS=${MEASUREMENTS:-}
-      - TIMEOUT_CLIENT=${TIMEOUT_CLIENT:-20}
-      - DAYS_OF_PAGINATION=${DAYS_OF_PAGINATION:-7}
-      - LOG_FILE=${LOG_FILE:-/var/log/backup_influxdb/backup.log}
-      - BACKUP_SCHEDULE=${BACKUP_SCHEDULE:-}
     volumes:
+      - ./backup_config.yaml:/app/backup_config.yaml
       - ./volumes/backup_logs:/var/log/backup_influxdb
     depends_on:
       - influxdb
@@ -51,7 +37,7 @@ services:
     networks:
       - backup_network
     command: >
-      sh -c "if [ -n \"$$BACKUP_SCHEDULE\" ]; then
+      sh -c "if grep -q 'backup_schedule:.*[^\"[:space:]]' /app/backup_config.yaml; then
                python /app/backup_influxdb_cron.py;
              else
                python /app/backup_influxdb.py;

@@ -1,23 +1,26 @@
 FROM python:3.11-slim
 
-# Set working directory
+# Directorio de trabajo
 WORKDIR /app
 
-# Install cron for scheduled backups
+# Instalar cron para backups programados
 RUN apt-get update && apt-get -y install cron && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install dependencies
+# Copiar requisitos e instalar dependencias
 COPY src/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy source code
+# Copiar código fuente
 COPY src/ .
 
-# Make scripts executable
+# Hacer scripts ejecutables
 RUN chmod +x /app/backup_influxdb.py /app/backup_influxdb_cron.py
 
-# Create log directory
+# Crear directorio de logs
 RUN mkdir -p /var/log/backup_influxdb
 
-# Default command (can be overridden)
+# El archivo de configuración YAML se monta como volumen
+# desde el host en docker-compose.yaml
+
+# Comando por defecto (ejecuta el script principal)
 CMD ["python", "/app/backup_influxdb.py"]

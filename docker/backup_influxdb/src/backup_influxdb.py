@@ -17,7 +17,7 @@ import os
 import sys
 import math
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Literal, Optional, Union, Any
+from typing import Dict, List, Literal, Optional, Union, Any, Tuple
 
 from dateutil.parser import parse
 from influxdb import InfluxDBClient
@@ -28,10 +28,13 @@ from conf import (
     DEST_DBS,
     SOURCE_GROUP_BY,
     MEASUREMENTS,
+    MEASUREMENTS_CONFIG,
     DAYS_OF_PAGINATION,
     logger,
     get_source_client_params,
-    get_dest_client_params
+    get_dest_client_params,
+    should_include_measurement,
+    should_include_field
 )
 
 
@@ -39,11 +42,8 @@ def check_connection(client: InfluxDBClient) -> bool:
     """
     Verify connection to an InfluxDB client.
 
-    Args:
-        client: InfluxDBClient instance
-
-    Returns:
-        bool: True if connection successful, False otherwise
+    :param client: InfluxDBClient instance
+    :return: True if connection successful, False otherwise
     """
     try:
         client.ping()
@@ -62,13 +62,10 @@ def get_entry_time(
     """
     Get timestamp of first or last record in a measurement.
 
-    Args:
-        client: InfluxDBClient instance
-        measurement: Name of the measurement
-        order: "ASC" for first entry, "DESC" for last entry
-
-    Returns:
-        str: Timestamp in format "YYYY-MM-DDThh:mm:ssZ" or None if no records
+    :param client: InfluxDBClient instance
+    :param measurement: Name of the measurement
+    :param order: "ASC" for first entry, "DESC" for last entry
+    :return: Timestamp in format "YYYY-MM-DDThh:mm:ssZ" or None if no records
     """
     query = f'SELECT * FROM "{measurement}" ORDER BY time {order} LIMIT 1'
     try:
@@ -87,47 +84,51 @@ def get_entry_time(
 
 def filter_non_numeric_values(
     point: Dict[str, Any],
+    measurement: str,
     float_selector: bool
 ) -> Dict[str, Union[int, float, str, bool]]:
     """
-    Filter fields in a data point by type.
+    Filter fields in a data point by type and configuration.
 
-    Args:
-        point: Data point to filter
-        float_selector: If True, keep only numeric fields. If False, keep non-numeric fields.
-
-    Returns:
-        Dict: Filtered fields dictionary
+    :param point: Data point to filter
+    :param measurement: Name of the measurement
+    :param float_selector: If True, keep only numeric fields. If False, keep non-numeric fields
+    :return: Filtered fields dictionary
     """
     filtered_fields = {}
     nan_count = 0
     nan_fields = []
 
-    if float_selector:
-        # Keep only numeric fields
-        for key, value in point.items():
-            if value is not None and key != "time" and isinstance(value, (int, float)):
-                # Skip NaN values
-                if isinstance(value, float) and (math.isnan(value) or value == float('inf') or value == float('-inf')):
-                    nan_count += 1
-                    nan_fields.append(key)
-                    logger.warning(f"\tSkipping NaN or infinite value for field '{key}' at time '{point.get('time', 'unknown')}'")
-                    continue
-                # Strip prefixes from query aggregation functions (mean_, last_)
-                clean_key = key
-                for prefix in ["mean_", "last_"]:
-                    if clean_key.startswith(prefix):
-                        clean_key = clean_key[len(prefix):]
-                filtered_fields[clean_key] = value
-    else:
-        # Keep only string and boolean fields
-        for key, value in point.items():
-            if value is not None and key != "time" and isinstance(value, (str, bool)):
-                # Strip prefixes from query aggregation functions (mean_, last_)
-                clean_key = key
-                for prefix in ["mean_", "last_"]:
-                    if clean_key.startswith(prefix):
-                        clean_key = clean_key[len(prefix):]
+    # Determine field type for configuration filtering
+    field_type = "numeric" if float_selector else "string" if not float_selector else "boolean"
+
+    for key, value in point.items():
+        if value is not None and key != "time":
+            # Skip fields that don't match the requested type
+            if float_selector and not isinstance(value, (int, float)):
+                continue
+            elif not float_selector and not isinstance(value, (str, bool)):
+                continue
+
+            # For numeric types, check for NaN and infinity
+            if isinstance(value, float) and (math.isnan(value) or value == float('inf') or value == float('-inf')):
+                nan_count += 1
+                nan_fields.append(key)
+                logger.warning(f"\tSkipping NaN or infinite value for field '{key}' at time '{point.get('time', 'unknown')}'")
+                continue
+
+            # Check if field should be included based on configuration
+            # For booleans, we need to figure out if it came from a boolean or string
+            actual_field_type = "numeric" if isinstance(value, (int, float)) else "boolean" if isinstance(value, bool) else "string"
+
+            # Strip prefixes from query aggregation functions (mean_, last_)
+            clean_key = key
+            for prefix in ["mean_", "last_"]:
+                if clean_key.startswith(prefix):
+                    clean_key = clean_key[len(prefix):]
+
+            # Check if this field should be included based on configuration
+            if should_include_field(measurement, clean_key, actual_field_type):
                 filtered_fields[clean_key] = value
 
     # Log the results of NaN filtering
@@ -144,12 +145,9 @@ def combine_records_by_time(
     """
     Combine records from two lists based on timestamp.
 
-    Args:
-        points_float: List of points with numeric fields
-        points_no_float: List of points with non-numeric fields
-
-    Returns:
-        List: Combined points with all fields
+    :param points_float: List of points with numeric fields
+    :param points_no_float: List of points with non-numeric fields
+    :return: Combined points with all fields
     """
     combined_points = []
 
@@ -182,39 +180,44 @@ def build_list_points(
     """
     Build list of points from InfluxDB query result.
 
-    Args:
-        result: InfluxDB query result
-        measurement: Name of the measurement
-        float_selector: If True, keep only numeric fields. If False, keep non-numeric fields.
-
-    Returns:
-        List: Points with selected fields
+    :param result: InfluxDB query result
+    :param measurement: Name of the measurement
+    :param float_selector: If True, keep only numeric fields. If False, keep non-numeric fields
+    :return: List of prepared data points
     """
+    # Initialize empty list
     points = []
-    total_nan_count = 0
-    field_counts = {}
 
-    for _, series in result.items():
-        for point in series:
-            # Create point with filtered fields
-            point_data = {
-                "time": point["time"],
-                "measurement": measurement,
-                "fields": filter_non_numeric_values(point, float_selector),
-            }
+    # Loop through all series in result
+    try:
+        for series in result.raw["series"]:
+            # Extract column names
+            columns = series["columns"]
 
-            # Track field names for reporting
-            for field_name in point_data["fields"]:
-                field_counts[field_name] = field_counts.get(field_name, 0) + 1
+            # Process each point
+            for values in series["values"]:
+                # Create point with all fields
+                point = dict(zip(columns, values))
 
-            # Add point only if it has fields
-            if point_data["fields"]:
-                points.append(point_data)
+                # Extract time value
+                time_str = point.pop("time")
 
-    # Log information about fields
-    if field_counts:
-        logger.info(f"\tFound {len(field_counts)} unique fields: {', '.join(sorted(field_counts.keys()))}")
+                # Filter and prepare fields
+                filtered_fields = filter_non_numeric_values(point, measurement, float_selector)
 
+                # Only add points with fields
+                if filtered_fields:
+                    cleaned_point = {
+                        "measurement": measurement,
+                        "time": time_str,
+                        "fields": filtered_fields,
+                    }
+                    points.append(cleaned_point)
+
+    except (KeyError, AttributeError, TypeError) as e:
+        logger.warning(f"\tNo valid data in query result: {str(e)}")
+
+    logger.info(f"\tExtracted {len(points)} points from query result")
     return points
 
 
@@ -223,71 +226,90 @@ def copy_data_since_last_entry(
     dest_client: InfluxDBClient,
     last_entry_time: str,
     measurement: str,
-    group_by: str,
+    group_by: Optional[str] = None,
 ) -> bool:
     """
-    Copy data from source to destination since the last entry.
+    Copy data since last entry time from source to destination.
 
-    Args:
-        source_client: Source InfluxDB client
-        dest_client: Destination InfluxDB client
-        last_entry_time: Timestamp of last entry in destination
-        measurement: Name of the measurement
-        group_by: Time grouping for query (e.g., "5m")
-
-    Returns:
-        bool: True if successful, False otherwise
+    :param source_client: Source InfluxDB client
+    :param dest_client: Destination InfluxDB client
+    :param last_entry_time: Timestamp of last entry in destination
+    :param measurement: Name of the measurement
+    :param group_by: Time grouping for query (e.g., "5m"), optional
+    :return: True if successful, False otherwise
     """
     try:
-        # Query numeric and non-numeric fields separately with proper aggregation functions
-        query_float = f"""
-            SELECT mean(*::field) FROM "{measurement}"
-            WHERE time > '{last_entry_time}'
-            GROUP BY time({group_by}) fill(none)
-        """
+        # Determine if we should use GROUP BY time
+        use_group_by = group_by is not None and group_by.strip() != ""
 
-        query_no_float = f"""
-            SELECT last(*::field) FROM "{measurement}"
-            WHERE time > '{last_entry_time}'
-            GROUP BY time({group_by}) fill(none)
-        """
+        # Build the query parts
+        where_clause = f"WHERE time > '{last_entry_time}'"
+        group_by_clause = f"GROUP BY time({group_by}) fill(none)" if use_group_by else ""
 
-        # Get numeric and non-numeric data
-        result_float = source_client.query(query_float)
-        logger.info(f"\tRetrieved numeric data from '{measurement}' since {last_entry_time}")
+        # Query numeric and non-numeric fields separately
+        if use_group_by:
+            query_float = f"""
+                SELECT mean(*::field) FROM "{measurement}"
+                {where_clause}
+                {group_by_clause}
+            """
 
-        result_no_float = source_client.query(query_no_float)
-        logger.info(f"\tRetrieved non-numeric data from '{measurement}' since {last_entry_time}")
+            query_no_float = f"""
+                SELECT last(*::field) FROM "{measurement}"
+                {where_clause}
+                {group_by_clause}
+            """
+        else:
+            # Without GROUP BY, just select all fields directly
+            query_float = f'SELECT *::field FROM "{measurement}" {where_clause}'
+            query_no_float = query_float  # Same query for both since no aggregation needed
 
-        # Build points lists
-        points_float = build_list_points(result_float, measurement, True)
-        points_no_float = build_list_points(result_no_float, measurement, False)
+        # Execute queries
+        float_result = source_client.query(query_float)
 
-        # Combine points
-        points = combine_records_by_time(points_float, points_no_float)
+        # For non-grouped queries, we don't need to query twice
+        if use_group_by:
+            no_float_result = source_client.query(query_no_float)
+        else:
+            no_float_result = float_result
 
-        # Write to destination if we have points
-        if points:
-            # Get time range
-            time_points = [p["time"] for p in points]
-            min_time = min(time_points) if time_points else "unknown"
-            max_time = max(time_points) if time_points else "unknown"
+        # Build points lists with type filtering
+        logger.info("\tProcessing numeric fields...")
+        points_float = build_list_points(float_result, measurement, True)
 
-            # Get field statistics
-            all_fields = set()
-            for point in points:
-                all_fields.update(point["fields"].keys())
+        # Only process non-numeric fields separately if using GROUP BY
+        if use_group_by:
+            logger.info("\tProcessing non-numeric fields...")
+            points_no_float = build_list_points(no_float_result, measurement, False)
+        else:
+            # For non-grouped queries, we need to filter the same result differently
+            logger.info("\tProcessing non-numeric fields from same result...")
+            points_no_float = build_list_points(float_result, measurement, False)
 
-            logger.info(f"\tWriting {len(points)} points to '{measurement}' (time range: {min_time} to {max_time})")
-            logger.info(f"\tFields being written: {', '.join(sorted(all_fields))}")
-            dest_client.write_points(points)
+        # Combine lists if we have both numeric and non-numeric data
+        if points_float and points_no_float:
+            logger.info("\tCombining numeric and non-numeric fields...")
+            final_points = combine_records_by_time(points_float, points_no_float)
+        elif points_float:
+            final_points = points_float
+        elif points_no_float:
+            final_points = points_no_float
+        else:
+            logger.info("\tNo new data found since last entry")
+            return True
+
+        # Write to destination
+        if final_points:
+            logger.info(f"\tWriting {len(final_points)} points to destination")
+            dest_client.write_points(final_points)
+            logger.info(f"\tSuccessfully copied {len(final_points)} points")
             return True
         else:
-            logger.info(f"\tNo new data found for '{measurement}' since {last_entry_time}")
+            logger.info("\tNo points to write after processing")
             return True
 
     except Exception as e:
-        logger.error(f"\tError copying data for '{measurement}': {str(e)}")
+        logger.error(f"\tError copying data for measurement '{measurement}': {str(e)}")
         return False
 
 
@@ -299,87 +321,97 @@ def copy_data_with_pagination(
     group_by: str,
 ) -> bool:
     """
-    Copy data with weekly pagination to handle large datasets.
+    Copy data with pagination for large datasets.
 
-    Args:
-        source_client: Source InfluxDB client
-        dest_client: Destination InfluxDB client
-        first_entry_time: Timestamp of first entry in source
-        measurement: Name of the measurement
-        group_by: Time grouping for query (e.g., "5m")
-
-    Returns:
-        bool: True if successful, False otherwise
+    :param source_client: Source InfluxDB client
+    :param dest_client: Destination InfluxDB client
+    :param first_entry_time: Timestamp of first entry in source
+    :param measurement: Name of the measurement
+    :param group_by: Time grouping for query (e.g., "5m"), required for pagination
+    :return: True if successful, False otherwise
     """
     try:
+        # Ensure group_by is valid for pagination
+        if group_by is None or (isinstance(group_by, str) and not group_by.strip()):
+            logger.error(f"\tGroup by value is required for pagination but was empty or invalid: '{group_by}'")
+            return False
+
         # Parse the first entry time
         start_time = parse(first_entry_time)
-        current_time = datetime.now(timezone.utc)
 
-        # Set initial start and end times
-        period_start = start_time
-        period_end = period_start + timedelta(days=DAYS_OF_PAGINATION)
+        # Get current time as end time
+        end_time = datetime.now(timezone.utc)
 
-        # Ensure end time doesn't exceed current time
-        if period_end > current_time:
-            period_end = current_time
-
+        # Calculate time intervals for pagination
+        pagination_days = DAYS_OF_PAGINATION
+        current_start = start_time
         success = True
 
-        # Paginate through data in chunks
-        while period_start < current_time:
-            period_start_str = period_start.strftime("%Y-%m-%dT%H:%M:%SZ")
-            period_end_str = period_end.strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Process each time interval
+        while current_start < end_time and success:
+            # Calculate end of current interval
+            current_end = current_start + timedelta(days=pagination_days)
 
-            logger.info(f"\tCopying data for '{measurement}' from {period_start_str} to {period_end_str}")
+            # Ensure we don't go beyond the end time
+            if current_end > end_time:
+                current_end = end_time
 
-            # Query numeric and non-numeric data separately with proper aggregation functions
+            # Format times for queries
+            start_str = current_start.strftime("%Y-%m-%dT%H:%M:%SZ")
+            end_str = current_end.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+            # Query numeric and non-numeric fields separately with proper aggregation functions
+            logger.info(f"\tQuerying data from {start_str} to {end_str}")
             query_float = f"""
                 SELECT mean(*::field) FROM "{measurement}"
-                WHERE time >= '{period_start_str}' AND time < '{period_end_str}'
+                WHERE time >= '{start_str}' AND time < '{end_str}'
                 GROUP BY time({group_by}) fill(none)
             """
 
             query_no_float = f"""
                 SELECT last(*::field) FROM "{measurement}"
-                WHERE time >= '{period_start_str}' AND time < '{period_end_str}'
+                WHERE time >= '{start_str}' AND time < '{end_str}'
                 GROUP BY time({group_by}) fill(none)
             """
 
-            # Get data for this period
-            result_float = source_client.query(query_float)
-            result_no_float = source_client.query(query_no_float)
+            # Execute queries
+            float_result = source_client.query(query_float)
+            no_float_result = source_client.query(query_no_float)
 
-            # Build and combine points
-            points_float = build_list_points(result_float, measurement, True)
-            points_no_float = build_list_points(result_no_float, measurement, False)
-            points = combine_records_by_time(points_float, points_no_float)
+            # Build points lists with type filtering
+            logger.info("\tProcessing numeric fields...")
+            points_float = build_list_points(float_result, measurement, True)
+            logger.info("\tProcessing non-numeric fields...")
+            points_no_float = build_list_points(no_float_result, measurement, False)
 
-            # Write to destination if we have points
-            if points:
-                # Get field statistics
-                all_fields = set()
-                for point in points:
-                    all_fields.update(point["fields"].keys())
-
-                logger.info(f"\tWriting {len(points)} points to '{measurement}'")
-                logger.info(f"\tFields being written: {', '.join(sorted(all_fields))}")
-                dest_client.write_points(points)
+            # Combine lists if we have both numeric and non-numeric data
+            if points_float and points_no_float:
+                logger.info("\tCombining numeric and non-numeric fields...")
+                final_points = combine_records_by_time(points_float, points_no_float)
+            elif points_float:
+                final_points = points_float
+            elif points_no_float:
+                final_points = points_no_float
             else:
-                logger.info(f"\tNo data found for '{measurement}' from {period_start_str} to {period_end_str}")
+                logger.info(f"\tNo valid points found for interval {start_str} to {end_str}")
+                final_points = []
 
-            # Move to next period
-            period_start = period_end
-            period_end = period_start + timedelta(days=DAYS_OF_PAGINATION)
+            # Write to destination
+            if final_points:
+                logger.info(f"\tWriting {len(final_points)} points to destination")
+                dest_client.write_points(final_points)
+                logger.info(f"\tSuccessfully copied {len(final_points)} points")
+            else:
+                logger.info("\tNo points to write after processing")
 
-            # Ensure end time doesn't exceed current time
-            if period_end > current_time:
-                period_end = current_time
+            # Update current_start for next iteration
+            current_start = current_end
+            logger.info(f"\tMoving to next time interval")
 
         return success
 
     except Exception as e:
-        logger.error(f"\tError copying data for '{measurement}' with pagination: {str(e)}")
+        logger.error(f"\tError copying data with pagination for '{measurement}': {str(e)}")
         return False
 
 
@@ -387,54 +419,71 @@ def backup_measurement(
     source_client: InfluxDBClient,
     dest_client: InfluxDBClient,
     measurement: str,
-    group_by: str,
+    group_by: Optional[str] = None,
 ) -> bool:
     """
-    Back up a single measurement from source to destination.
+    Backup a single measurement from source to destination.
 
-    Args:
-        source_client: Source InfluxDB client
-        dest_client: Destination InfluxDB client
-        measurement: Name of the measurement
-        group_by: Time grouping for query (e.g., "5m")
-
-    Returns:
-        bool: True if successful, False otherwise
+    :param source_client: Source InfluxDB client
+    :param dest_client: Destination InfluxDB client
+    :param measurement: Name of the measurement
+    :param group_by: Time grouping for query (e.g., "5m"), optional for direct copy, required for pagination
+    :return: True if successful, False otherwise
     """
-    try:
-        logger.info(f"Processing measurement: '{measurement}'")
+    logger.info(f"Processing measurement: {measurement}")
 
-        # Check if destination already has data for this measurement
+    # Check if the measurement should be included based on configuration
+    if not should_include_measurement(measurement):
+        logger.info(f"Skipping measurement '{measurement}' based on configuration")
+        return True
+
+    # Check for measurement-specific configuration
+    if measurement in MEASUREMENTS_CONFIG:
+        logger.info(f"Found specific configuration for measurement '{measurement}'")
+
+    try:
+        # Check if destination has any data for this measurement
         last_entry_time = get_entry_time(dest_client, measurement, "DESC")
 
         if last_entry_time:
-            # Incremental backup from last entry
-            logger.info(f"\tFound last entry at {last_entry_time} for '{measurement}'")
+            # Incremental backup - copy only data newer than last entry
+            logger.info(f"\tFound last entry at {last_entry_time}, performing incremental backup")
             return copy_data_since_last_entry(
                 source_client, dest_client, last_entry_time, measurement, group_by
             )
         else:
-            # Full backup (first time)
-            logger.info(f"\tNo existing data found for '{measurement}', attempting full backup")
-
-            # Get first entry time in source
+            # Full backup - check data volume first
             first_entry_time = get_entry_time(source_client, measurement, "ASC")
+            last_entry_time = get_entry_time(source_client, measurement, "DESC")
 
-            if not first_entry_time:
-                logger.warning(f"\tNo data found in source for '{measurement}'")
+            if not first_entry_time or not last_entry_time:
+                logger.info(f"\tNo data found in source for measurement '{measurement}'")
                 return True
 
-            # Try direct copy first
-            try:
-                logger.info(f"\tAttempting direct copy for '{measurement}' from {first_entry_time}")
-                return copy_data_since_last_entry(
-                    source_client, dest_client, first_entry_time, measurement, group_by
-                )
-            except Exception as e:
-                # If direct copy fails (likely due to too much data), use pagination
-                logger.warning(f"\tDirect copy failed for '{measurement}', switching to pagination: {str(e)}")
+            # Check time span
+            first_datetime = parse(first_entry_time)
+            last_datetime = parse(last_entry_time)
+            span_days = (last_datetime - first_datetime).days
+
+            logger.info(f"\tData spans {span_days} days from {first_entry_time} to {last_entry_time}")
+
+            # If span is large, use pagination (which requires a group_by value)
+            if span_days > DAYS_OF_PAGINATION:
+                logger.info(f"\tData span > {DAYS_OF_PAGINATION} days, using pagination")
+
+                # Pagination requires a valid group_by value
+                if group_by is None or (isinstance(group_by, str) and not group_by.strip()):
+                    logger.error(f"\tPagination requires a group_by value, but none was provided or it was empty")
+                    return False
+
                 return copy_data_with_pagination(
                     source_client, dest_client, first_entry_time, measurement, group_by
+                )
+            else:
+                # Small dataset, can copy all at once without requiring group_by
+                logger.info(f"\tCopying all data at once")
+                return copy_data_since_last_entry(
+                    source_client, dest_client, "1970-01-01T00:00:00Z", measurement, group_by
                 )
 
     except Exception as e:
@@ -446,21 +495,30 @@ def get_measurements(client: InfluxDBClient, database: str) -> List[str]:
     """
     Get list of measurements in a database.
 
-    Args:
-        client: InfluxDB client
-        database: Database name
-
-    Returns:
-        List: Measurement names
+    :param client: InfluxDBClient instance
+    :param database: Name of the database
+    :return: List of measurement names
     """
     client.switch_database(database)
     result = client.query("SHOW MEASUREMENTS")
-    measurements = []
 
-    for point in result.get_points():
-        measurements.append(point["name"])
+    if result:
+        measurements = [m["name"] for m in result.get_points()]
+        logger.info(f"Found {len(measurements)} measurements in database '{database}'")
 
-    return measurements
+        # Filter measurements based on configuration
+        filtered = []
+        for measurement in measurements:
+            if should_include_measurement(measurement):
+                filtered.append(measurement)
+            else:
+                logger.info(f"Excluding measurement '{measurement}' based on configuration")
+
+        logger.info(f"After filtering: {len(filtered)} measurements will be backed up")
+        return filtered
+    else:
+        logger.warning(f"No measurements found in database '{database}'")
+        return []
 
 
 def backup_database(
@@ -468,98 +526,99 @@ def backup_database(
     dest_client: InfluxDBClient,
     source_db: str,
     dest_db: str,
-    group_by: str,
+    group_by: Optional[str] = None,
 ) -> bool:
     """
-    Back up an entire database from source to destination.
+    Backup an entire database from source to destination.
 
-    Args:
-        source_client: Source InfluxDB client
-        dest_client: Destination InfluxDB client
-        source_db: Source database name
-        dest_db: Destination database name
-        group_by: Time grouping for query (e.g., "5m")
-
-    Returns:
-        bool: True if successful, False otherwise
+    :param source_client: Source InfluxDB client
+    :param dest_client: Destination InfluxDB client
+    :param source_db: Source database name
+    :param dest_db: Destination database name
+    :param group_by: Time grouping for query (e.g., "5m"), optional for direct copy, required for pagination
+    :return: True if successful, False otherwise
     """
-    try:
-        logger.info(f"Backing up database '{source_db}' to '{dest_db}'")
+    # Connect to source and destination
+    source_client.switch_database(source_db)
 
-        # Switch to source database
-        source_client.switch_database(source_db)
+    # Create destination database if it doesn't exist
+    if dest_db not in dest_client.get_list_database():
+        logger.info(f"Creating database '{dest_db}' in destination")
+        dest_client.create_database(dest_db)
 
-        # Create destination database if it doesn't exist
-        dest_dbs = [db["name"] for db in dest_client.get_list_database()]
-        if dest_db not in dest_dbs:
-            logger.info(f"Creating destination database '{dest_db}'")
-            dest_client.create_database(dest_db)
+    dest_client.switch_database(dest_db)
 
-        # Switch to destination database
-        dest_client.switch_database(dest_db)
+    # Get list of measurements
+    measurements = get_measurements(source_client, source_db)
 
-        # Get measurements to back up
-        if MEASUREMENTS:
-            db_measurements = [m for m in MEASUREMENTS if m.strip()]
-            logger.info(f"Using configured measurements: {', '.join(db_measurements)}")
-        else:
-            db_measurements = get_measurements(source_client, source_db)
-            logger.info(f"Found {len(db_measurements)} measurements in '{source_db}'")
+    # Backup each measurement
+    success = True
+    errors = []
 
-        # Back up each measurement
-        success = True
-        for measurement in db_measurements:
-            measurement_success = backup_measurement(
-                source_client, dest_client, measurement, group_by
-            )
-            if not measurement_success:
-                success = False
+    for measurement in measurements:
+        logger.info(f"Backing up '{source_db}.{measurement}' to '{dest_db}.{measurement}'")
+        if not backup_measurement(source_client, dest_client, measurement, group_by):
+            logger.error(f"Failed to backup measurement '{measurement}'")
+            success = False
+            errors.append(measurement)
 
-        return success
+    # Report results
+    if success:
+        logger.info(f"Successfully backed up database '{source_db}' to '{dest_db}'")
+    else:
+        logger.warning(f"Backup completed with errors for {len(errors)} measurements")
+        logger.warning(f"Problematic measurements: {', '.join(errors)}")
 
-    except Exception as e:
-        logger.error(f"Error backing up database '{source_db}' to '{dest_db}': {str(e)}")
-        return False
+    return success
 
 
 def main():
-    """Main backup function."""
-    logger.info("Starting InfluxDB backup process")
+    """
+    Main entry point for the backup script.
 
-    # Create clients
-    source_client = InfluxDBClient(**get_source_client_params())
-    dest_client = InfluxDBClient(**get_dest_client_params())
+    Connects to source and destination InfluxDB servers and performs the backup.
+    """
+    logger.info("Starting InfluxDB backup")
+
+    # Create source client
+    source_params = get_source_client_params()
+    source_url = f"{source_params['host']}:{source_params['port']}"
+    logger.info(f"Connecting to source InfluxDB at {source_url}")
+    source_client = InfluxDBClient(**source_params)
+
+    # Create destination client
+    dest_params = get_dest_client_params()
+    dest_url = f"{dest_params['host']}:{dest_params['port']}"
+    logger.info(f"Connecting to destination InfluxDB at {dest_url}")
+    dest_client = InfluxDBClient(**dest_params)
 
     # Check connections
-    if not check_connection(source_client):
-        logger.error("Failed to connect to source InfluxDB server")
-        return False
+    if not check_connection(source_client) or not check_connection(dest_client):
+        logger.error("Connection check failed, aborting")
+        sys.exit(1)
 
-    if not check_connection(dest_client):
-        logger.error("Failed to connect to destination InfluxDB server")
-        return False
-
-    # Back up each database
+    # Process each database
     success = True
-    for i, (source_db, dest_db) in enumerate(zip(SOURCE_DBS, DEST_DBS)):
-        db_success = backup_database(
-            source_client, dest_client, source_db, dest_db, SOURCE_GROUP_BY
-        )
-        if not db_success:
+    for i, source_db in enumerate(SOURCE_DBS):
+        dest_db = DEST_DBS[i]
+        logger.info(f"Processing database: {source_db} -> {dest_db}")
+
+        if not backup_database(source_client, dest_client, source_db, dest_db, SOURCE_GROUP_BY):
+            logger.error(f"Failed to backup database '{source_db}'")
             success = False
 
     # Close connections
     source_client.close()
     dest_client.close()
 
+    # Report final status
     if success:
-        logger.info("Backup process completed successfully\n")
+        logger.info("Backup completed successfully\n")
+        sys.exit(0)
     else:
-        logger.warning("Backup process completed with errors\n")
-
-    return success
+        logger.warning("Backup completed with errors\n")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    success = main()
-    sys.exit(0 if success else 1)
+    main()
