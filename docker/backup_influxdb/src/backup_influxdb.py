@@ -34,7 +34,12 @@ from conf import (
     get_source_client_params,
     get_dest_client_params,
     should_include_measurement,
-    should_include_field
+    should_include_field,
+    START_DATE,
+    END_DATE,
+    BACKUP_PERIOD,
+    DATA_WINDOW,
+    parse_time_range
 )
 
 
@@ -227,6 +232,7 @@ def copy_data_since_last_entry(
     last_entry_time: str,
     measurement: str,
     group_by: Optional[str] = None,
+    end_entry_time: Optional[str] = None,
 ) -> bool:
     """
     Copy data since last entry time from source to destination.
@@ -236,14 +242,21 @@ def copy_data_since_last_entry(
     :param last_entry_time: Timestamp of last entry in destination
     :param measurement: Name of the measurement
     :param group_by: Time grouping for query (e.g., "5m"), optional
+    :param end_entry_time: Optional end timestamp for the backup range
     :return: True if successful, False otherwise
     """
     try:
         # Determine if we should use GROUP BY time
         use_group_by = group_by is not None and group_by.strip() != ""
 
-        # Build the query parts
-        where_clause = f"WHERE time > '{last_entry_time}'"
+        # Build the where clause based on time range
+        if end_entry_time:
+            where_clause = f"WHERE time > '{last_entry_time}' AND time <= '{end_entry_time}'"
+            logger.info(f"\tCopying data in time range: {last_entry_time} to {end_entry_time}")
+        else:
+            where_clause = f"WHERE time > '{last_entry_time}'"
+            logger.info(f"\tCopying data since: {last_entry_time}")
+
         group_by_clause = f"GROUP BY time({group_by}) fill(none)" if use_group_by else ""
 
         # Query numeric and non-numeric fields separately
@@ -319,6 +332,7 @@ def copy_data_with_pagination(
     first_entry_time: str,
     measurement: str,
     group_by: str,
+    end_entry_time: Optional[str] = None,
 ) -> bool:
     """
     Copy data with pagination for large datasets.
@@ -328,6 +342,7 @@ def copy_data_with_pagination(
     :param first_entry_time: Timestamp of first entry in source
     :param measurement: Name of the measurement
     :param group_by: Time grouping for query (e.g., "5m"), required for pagination
+    :param end_entry_time: Optional end timestamp for the backup range
     :return: True if successful, False otherwise
     """
     try:
@@ -339,8 +354,13 @@ def copy_data_with_pagination(
         # Parse the first entry time
         start_time = parse(first_entry_time)
 
-        # Get current time as end time
-        end_time = datetime.now(timezone.utc)
+        # Get current time as end time, or use specified end time if provided
+        if end_entry_time:
+            end_time = parse(end_entry_time)
+            logger.info(f"\tPaginating with time bounds: {first_entry_time} to {end_entry_time}")
+        else:
+            end_time = datetime.now(timezone.utc)
+            logger.info(f"\tPaginating from {first_entry_time} to now")
 
         # Calculate time intervals for pagination
         pagination_days = DAYS_OF_PAGINATION
@@ -442,49 +462,79 @@ def backup_measurement(
         logger.info(f"Found specific configuration for measurement '{measurement}'")
 
     try:
+        # Get time range from configuration (if any)
+        start_date, end_date = parse_time_range()
+
+        # Handle data window differently - always use this to show only the latest data
+        use_data_window = False
+        if DATA_WINDOW and not START_DATE and not BACKUP_PERIOD and not END_DATE:
+            use_data_window = True
+            # DATA_WINDOW means we want to backup only the last X period of data
+            # For this, we'll first clear the destination and then do a fresh backup
+            if measurement in dest_client.get_list_measurements():
+                logger.info(f"\tApplying data window of {DATA_WINDOW}, clearing existing data for '{measurement}'")
+                dest_client.query(f'DROP MEASUREMENT "{measurement}"')
+
+        # Get the source data timespan
+        source_first_entry_time = get_entry_time(source_client, measurement, "ASC")
+        source_last_entry_time = get_entry_time(source_client, measurement, "DESC")
+
+        if not source_first_entry_time or not source_last_entry_time:
+            logger.info(f"\tNo data found in source for measurement '{measurement}'")
+            return True
+
         # Check if destination has any data for this measurement
         last_entry_time = get_entry_time(dest_client, measurement, "DESC")
 
-        if last_entry_time:
-            # Incremental backup - copy only data newer than last entry
-            logger.info(f"\tFound last entry at {last_entry_time}, performing incremental backup")
-            return copy_data_since_last_entry(
-                source_client, dest_client, last_entry_time, measurement, group_by
+        # Determine effective start and end times
+        if start_date:
+            effective_start_time = start_date
+            logger.info(f"\tUsing specified start date: {effective_start_time}")
+        elif last_entry_time and not use_data_window:
+            # If no start_date specified but we have existing data, do an incremental backup
+            effective_start_time = last_entry_time
+            logger.info(f"\tIncremental backup from last entry: {effective_start_time}")
+        else:
+            # For full backup or data window, use the first entry time from source
+            effective_start_time = source_first_entry_time
+            logger.info(f"\tFull backup from first entry: {effective_start_time}")
+
+        # Determine effective end time
+        if end_date:
+            effective_end_time = end_date
+            logger.info(f"\tUsing specified end date: {effective_end_time}")
+        else:
+            # If no end_date specified, use current time (effectively "now")
+            effective_end_time = None
+
+        # Calculate time span for pagination decision
+        start_datetime = parse(effective_start_time)
+        end_datetime = parse(effective_end_time) if effective_end_time else datetime.now(timezone.utc)
+        span_days = (end_datetime - start_datetime).days
+
+        if effective_end_time:
+            logger.info(f"\tData spans {span_days} days from {effective_start_time} to {effective_end_time}")
+        else:
+            logger.info(f"\tData spans {span_days} days from {effective_start_time} to now")
+
+        # If span is large, use pagination (which requires a group_by value)
+        if span_days > DAYS_OF_PAGINATION:
+            logger.info(f"\tData span > {DAYS_OF_PAGINATION} days, using pagination")
+
+            # Pagination requires a valid group_by value
+            if group_by is None or (isinstance(group_by, str) and not group_by.strip()):
+                logger.error(f"\tPagination requires a group_by value, but none was provided or it was empty")
+                return False
+
+            return copy_data_with_pagination(
+                source_client, dest_client, effective_start_time, measurement, group_by, effective_end_time
             )
         else:
-            # Full backup - check data volume first
-            first_entry_time = get_entry_time(source_client, measurement, "ASC")
-            last_entry_time = get_entry_time(source_client, measurement, "DESC")
-
-            if not first_entry_time or not last_entry_time:
-                logger.info(f"\tNo data found in source for measurement '{measurement}'")
-                return True
-
-            # Check time span
-            first_datetime = parse(first_entry_time)
-            last_datetime = parse(last_entry_time)
-            span_days = (last_datetime - first_datetime).days
-
-            logger.info(f"\tData spans {span_days} days from {first_entry_time} to {last_entry_time}")
-
-            # If span is large, use pagination (which requires a group_by value)
-            if span_days > DAYS_OF_PAGINATION:
-                logger.info(f"\tData span > {DAYS_OF_PAGINATION} days, using pagination")
-
-                # Pagination requires a valid group_by value
-                if group_by is None or (isinstance(group_by, str) and not group_by.strip()):
-                    logger.error(f"\tPagination requires a group_by value, but none was provided or it was empty")
-                    return False
-
-                return copy_data_with_pagination(
-                    source_client, dest_client, first_entry_time, measurement, group_by
-                )
-            else:
-                # Small dataset, can copy all at once without requiring group_by
-                logger.info(f"\tCopying all data at once")
-                return copy_data_since_last_entry(
-                    source_client, dest_client, "1970-01-01T00:00:00Z", measurement, group_by
-                )
+            # Small dataset, can copy all at once
+            logger.info(f"\tData span <= {DAYS_OF_PAGINATION} days, copying all at once")
+            return copy_data_since_last_entry(
+                source_client, dest_client, effective_start_time, measurement, group_by, effective_end_time
+            )
 
     except Exception as e:
         logger.error(f"Error backing up measurement '{measurement}': {str(e)}")
@@ -579,6 +629,29 @@ def main():
     Connects to source and destination InfluxDB servers and performs the backup.
     """
     logger.info("Starting InfluxDB backup")
+
+    # Log time range options if set
+    if START_DATE:
+        logger.info(f"Using START_DATE: {START_DATE}")
+    if END_DATE:
+        logger.info(f"Using END_DATE: {END_DATE}")
+    if BACKUP_PERIOD:
+        logger.info(f"Using BACKUP_PERIOD: {BACKUP_PERIOD}")
+    if DATA_WINDOW:
+        logger.info(f"Using DATA_WINDOW: {DATA_WINDOW}")
+
+    # Show effective time range after parsing
+    start_time, end_time = parse_time_range()
+    if start_time or end_time:
+        logger.info(f"Effective time range for backup:")
+        if start_time:
+            logger.info(f"  - From: {start_time}")
+        else:
+            logger.info(f"  - From: beginning of data")
+        if end_time:
+            logger.info(f"  - To: {end_time}")
+        else:
+            logger.info(f"  - To: current time")
 
     # Create source client
     source_params = get_source_client_params()

@@ -382,6 +382,29 @@ options:
   backup_schedule: "0 */6 * * *"  # Every 6 hours
 ```
 
+### Date Range Configuration
+
+You can precisely control the time range of data to backup using specific start and end dates:
+
+```yaml
+# backup_config.yaml
+# ... other configuration ...
+options:
+  # Fixed date range backup
+  start_date: "2024-05-01T00:00:00Z"  # Start from May 1, 2024
+  end_date: "2024-06-01T00:00:00Z"    # End at June 1, 2024
+  backup_period: ""                   # Empty when using explicit dates
+```
+
+This configuration will backup only data between May 1 and June 1, 2024, regardless of when the backup is executed. By setting both explicit dates, you can:
+
+- Archive specific historical periods
+- Create point-in-time snapshots for reporting
+- Split large backup operations into manageable chunks
+- Maintain data consistency across multiple backup operations
+
+For incremental or rolling backups that reference the current time, you can use the backup_period setting instead.
+
 ### Direct Python Script Usage
 
 You can use the Python scripts directly outside of Docker if needed:

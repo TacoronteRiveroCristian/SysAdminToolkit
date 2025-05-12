@@ -140,6 +140,43 @@ options:
   # - Valor 30: procesa datos en chunks de 30 días (más rápido, requiere más memoria)
   days_of_pagination: 7
 
+  # Configuración de rango temporal
+  # Estas opciones permiten definir qué rango de datos será respaldado
+  # Si no se especifica ninguna, se respaldarán todos los datos disponibles
+
+  # OPCIÓN 1: Fecha de inicio específica (ISO 8601: YYYY-MM-DDTHH:MM:SSZ)
+  # Ejemplo: "2023-01-01T00:00:00Z" - Respaldar desde 1 de Enero de 2023
+  # Si se especifica sin end_date, el backup incluirá datos desde esta fecha hasta ahora
+  start_date: ""
+
+  # OPCIÓN 2: Fecha de fin específica (ISO 8601: YYYY-MM-DDTHH:MM:SSZ)
+  # Ejemplo: "2023-12-31T23:59:59Z" - Respaldar hasta 31 de Diciembre de 2023
+  # Solo se usa si start_date está definido, para crear un rango completo de fechas
+  end_date: ""
+
+  # OPCIÓN 3: Periodo relativo
+  # Puedes usar un periodo relativo de dos formas:
+
+  # 3.1: Con backup_period solo (sin start_date/end_date):
+  # Respaldará datos desde "ahora - periodo" hasta "ahora"
+  # Ejemplos: "7d" (últimos 7 días), "3w" (últimas 3 semanas), "6M" (últimos 6 meses)
+
+  # 3.2: Con start_date + backup_period:
+  # Respaldará datos desde start_date hasta "start_date + periodo"
+  # Ejemplo: start_date: "2023-01-01T00:00:00Z", backup_period: "30d"
+  # Respaldará desde el 1 de Enero de 2023 hasta el 31 de Enero de 2023
+
+  # Unidades válidas: s (segundos), m (minutos), h (horas), d (días),
+  #                  w (semanas), M (meses), y (años)
+  backup_period: ""
+
+  # OPCIÓN 4: Ventana de datos (tamaño fijo de datos)
+  # Similar a backup_period, pero se aplicará en cada ejecución
+  # Útil para mantener un historial constante (ej: siempre los últimos 7 días)
+  # Si se especifica, cada backup mantendrá solo esta ventana de datos
+  # NOTA: Esta opción borrará datos antiguos en el destino
+  data_window: ""
+
   # Ruta al archivo de log
   # Asegúrate de que esta ruta exista y tenga permisos de escritura
   # Para Docker: esta ruta es DENTRO del contenedor, considera usar un volumen

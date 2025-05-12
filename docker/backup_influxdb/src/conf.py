@@ -7,8 +7,9 @@ import logging
 import os
 import re
 import sys
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
+from datetime import datetime, timedelta
 
 import yaml
 from dotenv import load_dotenv
@@ -145,6 +146,12 @@ MEASUREMENTS_CONFIG = config.get('measurements', {}).get('specific', {})
 DAYS_OF_PAGINATION = int(os.getenv("DAYS_OF_PAGINATION") or config.get('options', {}).get('days_of_pagination', 7))
 TIMEOUT_CLIENT = int(os.getenv("TIMEOUT_CLIENT") or config.get('options', {}).get('timeout_client', 20))
 
+# Time range options (new)
+START_DATE = os.getenv("START_DATE") or config.get('options', {}).get('start_date', '')
+END_DATE = os.getenv("END_DATE") or config.get('options', {}).get('end_date', '')
+BACKUP_PERIOD = os.getenv("BACKUP_PERIOD") or config.get('options', {}).get('backup_period', '')
+DATA_WINDOW = os.getenv("DATA_WINDOW") or config.get('options', {}).get('data_window', '')
+
 # Cron schedule for backups
 BACKUP_SCHEDULE = os.getenv("BACKUP_SCHEDULE") or config.get('options', {}).get('backup_schedule', '')
 
@@ -184,6 +191,16 @@ logger.info(f"MEASUREMENTS include: {MEASUREMENTS_INCLUDE}")
 logger.info(f"MEASUREMENTS exclude: {MEASUREMENTS_EXCLUDE}")
 logger.info(f"Specific measurement config: {len(MEASUREMENTS_CONFIG)} measurements")
 
+# Log time range options
+if START_DATE:
+    logger.info(f"START_DATE: {START_DATE}")
+if END_DATE:
+    logger.info(f"END_DATE: {END_DATE}")
+if BACKUP_PERIOD:
+    logger.info(f"BACKUP_PERIOD: {BACKUP_PERIOD}")
+if DATA_WINDOW:
+    logger.info(f"DATA_WINDOW: {DATA_WINDOW}")
+
 # Validation
 if len(SOURCE_DBS) != len(DEST_DBS):
     logger.error("Source and destination databases must have the same number of elements")
@@ -192,6 +209,12 @@ if len(SOURCE_DBS) != len(DEST_DBS):
 if not SOURCE_URL or not DEST_URL:
     logger.error("Source and destination URLs are required")
     raise ValueError("Source and destination URLs are required")
+
+# Validate time range options
+time_options_count = sum(1 for x in [START_DATE, BACKUP_PERIOD, DATA_WINDOW] if x)
+if (time_options_count > 1 and not (START_DATE and BACKUP_PERIOD and not DATA_WINDOW and not END_DATE) and
+    not (START_DATE and END_DATE and not BACKUP_PERIOD and not DATA_WINDOW)):
+    logger.warning("Multiple conflicting time range options are set. Priority: START_DATE+END_DATE > START_DATE+BACKUP_PERIOD > BACKUP_PERIOD > DATA_WINDOW")
 
 def get_source_client_params():
     """
@@ -288,3 +311,112 @@ def should_include_field(measurement: str, field_name: str, field_type: str) -> 
 
     # No specific configuration for this measurement, include all fields
     return True
+
+
+def parse_time_range() -> Tuple[Optional[str], Optional[str]]:
+    """
+    Parse time range options and return the appropriate start and end times for backup.
+
+    Returns:
+        Tuple[Optional[str], Optional[str]]:
+            (start_time ISO string or None, end_time ISO string or None)
+            If no time range is specified, both will be None
+    """
+    now = datetime.now().replace(microsecond=0)
+    start_time = None
+    end_time = None
+
+    # Case 1: START_DATE + END_DATE - Specific range
+    if START_DATE and END_DATE:
+        logger.info(f"Using fixed date range: {START_DATE} to {END_DATE}")
+        return START_DATE, END_DATE
+
+    # Case 2: START_DATE + BACKUP_PERIOD - Range from start + duration
+    elif START_DATE and BACKUP_PERIOD:
+        try:
+            start_dt = parse(START_DATE)
+
+            # Parse the relative time format (e.g., 7d, 3w, 6M, 1y)
+            if re.match(r'^\d+[smhdwMy]$', BACKUP_PERIOD):
+                value = int(BACKUP_PERIOD[:-1])
+                unit = BACKUP_PERIOD[-1]
+
+                # Calculate the delta based on the unit
+                if unit == 's':  # seconds
+                    delta = timedelta(seconds=value)
+                elif unit == 'm':  # minutes
+                    delta = timedelta(minutes=value)
+                elif unit == 'h':  # hours
+                    delta = timedelta(hours=value)
+                elif unit == 'd':  # days
+                    delta = timedelta(days=value)
+                elif unit == 'w':  # weeks
+                    delta = timedelta(weeks=value)
+                elif unit == 'M':  # months (approx 30 days)
+                    delta = timedelta(days=value*30)
+                elif unit == 'y':  # years (approx 365 days)
+                    delta = timedelta(days=value*365)
+                else:
+                    logger.error(f"Invalid time unit in {BACKUP_PERIOD}")
+                    return START_DATE, None
+
+                # Calculate end time by adding period to start date
+                end_dt = start_dt + delta
+                end_time = end_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+                logger.info(f"Using date range: {START_DATE} to {end_time} (period: {BACKUP_PERIOD})")
+                return START_DATE, end_time
+            else:
+                logger.error(f"Invalid time format: {BACKUP_PERIOD}. Expected format like '7d', '12h', etc.")
+                return START_DATE, None
+        except Exception as e:
+            logger.error(f"Failed to parse START_DATE with BACKUP_PERIOD: {e}")
+            return START_DATE, None
+
+    # Case 3: START_DATE only - From specific date to now
+    elif START_DATE:
+        logger.info(f"Using date range: {START_DATE} to now")
+        return START_DATE, None
+
+    # Case 4: BACKUP_PERIOD only - Relative period from now
+    elif BACKUP_PERIOD:
+        # Parse the relative time format (e.g., 7d, 3w, 6M, 1y)
+        if re.match(r'^\d+[smhdwMy]$', BACKUP_PERIOD):
+            value = int(BACKUP_PERIOD[:-1])
+            unit = BACKUP_PERIOD[-1]
+
+            # Calculate the delta based on the unit
+            if unit == 's':  # seconds
+                delta = timedelta(seconds=value)
+            elif unit == 'm':  # minutes
+                delta = timedelta(minutes=value)
+            elif unit == 'h':  # hours
+                delta = timedelta(hours=value)
+            elif unit == 'd':  # days
+                delta = timedelta(days=value)
+            elif unit == 'w':  # weeks
+                delta = timedelta(weeks=value)
+            elif unit == 'M':  # months (approx 30 days)
+                delta = timedelta(days=value*30)
+            elif unit == 'y':  # years (approx 365 days)
+                delta = timedelta(days=value*365)
+            else:
+                logger.error(f"Invalid time unit in {BACKUP_PERIOD}")
+                return None, None
+
+            # Calculate start time
+            start_dt = now - delta
+            start_time = start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+            logger.info(f"Using date range: {start_time} to now (period: {BACKUP_PERIOD})")
+            return start_time, None
+        else:
+            logger.error(f"Invalid time format: {BACKUP_PERIOD}. Expected format like '7d', '12h', etc.")
+            return None, None
+
+    # Case 5: DATA_WINDOW only - Maintained window for each backup
+    elif DATA_WINDOW:
+        # DATA_WINDOW is treated specially in backup_measurement()
+        # It will clear existing data and maintain this window
+        return None, None
+
+    # No time range specified, return None to use default behavior
+    return None, None
