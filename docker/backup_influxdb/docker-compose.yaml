@@ -29,8 +29,6 @@ services:
     volumes:
       - ./backup_config.yaml:/app/backup_config.yaml
       - ./volumes/backup_logs:/var/log/backup_influxdb
-    depends_on:
-      - influxdb
     profiles:
       - development
       - production

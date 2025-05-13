@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  selenium-prod:
+    build:
+      context: .
+      dockerfile: selenium.dockerfile
+    container_name: selenium-prod
+    restart: unless-stopped
+    networks:
+      - selenium-network
+    command: python examples/ree/scraping_ree.py
+    environment:
+      - TZ=Europe/Madrid
+
+  selenium-dev:
+    build:
+      context: .
+      dockerfile: selenium.dockerfile
+    container_name: selenium-dev
+    restart: unless-stopped
+    networks:
+      - selenium-network
+    volumes:
+      - ./examples:/app/examples
+      - ./volumes/app:/app/data
+    command: sleep infinity
+    environment:
+      - TZ=Europe/Madrid
+
+  influxdb:
+    image: influxdb:1.8
+    container_name: influxdb
+    restart: unless-stopped
+    networks:
+      - selenium-network
+    ports:
+      - "8086:8086"
+    volumes:
+      - ./volumes/influxdb:/var/lib/influxdb
+
+networks:
+  selenium-network:
+    driver: bridge
