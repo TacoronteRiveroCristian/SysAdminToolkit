@@ -23,4 +23,4 @@ RUN mkdir -p /var/log/backup_influxdb
 # desde el host en docker-compose.yaml
 
 # Comando por defecto (ejecuta el script principal)
-CMD ["python", "/app/backup_influxdb.py"]
+CMD ["sleep", "infinity"]
