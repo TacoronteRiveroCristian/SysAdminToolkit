@@ -1,0 +1,55 @@
+services:
+  postgres_db:
+    image: postgres:17
+    container_name: postgres_db_container
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "${POSTGRES_PORT}:${POSTGRES_PORT}"
+    volumes:
+      - ./volumes/postgres_data:/var/lib/postgresql/data
+    networks:
+      - app_network
+
+  fastapi_app:
+    container_name: fastapi_app_container
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      FASTAPI_APP_HOST: ${FASTAPI_APP_HOST}
+      FASTAPI_APP_PORT: ${FASTAPI_APP_PORT}
+    ports:
+      - "${FASTAPI_APP_PORT}:${FASTAPI_APP_PORT}"
+    volumes:
+      - ./app:/app
+      - ./volumes/fastapi_app_data:/app_data # Example volume for app-specific data if needed
+    depends_on:
+      - postgres_db
+    networks:
+      - app_network
+
+networks:
+  app_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+    driver_opts:
+      type: 'none'
+      o: 'bind'
+      device: '${PWD}/volumes/postgres_data' # Ensures it's within backup_postgres
+  fastapi_app_data:
+    driver: local
+    driver_opts:
+      type: 'none'
+      o: 'bind'
+      device: '${PWD}/volumes/fastapi_app_data' # Ensures it's within backup_postgres

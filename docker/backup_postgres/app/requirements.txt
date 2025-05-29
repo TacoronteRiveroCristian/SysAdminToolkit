@@ -1,0 +1,7 @@
+fastapi[all]
+uvicorn[standard]
+psycopg2-binary
+SQLAlchemy
+python-dotenv
+pydantic-settings
+alembic # For database migrations, good practice
