@@ -5,3 +5,7 @@ SQLAlchemy
 python-dotenv
 pydantic-settings
 alembic # For database migrations, good practice
+
+# Test dependencies
+pytest
+httpx

@@ -1,55 +1,86 @@
+# YAML Anchors for common configurations
+x-common-build: &common-build
+  context: ./app
+  dockerfile: Dockerfile
+
+x-common-depends_on_postgres: &common-depends_on_postgres
+  postgres_db:
+    condition: service_healthy
+
 services:
   postgres_db:
-    image: postgres:17
-    container_name: postgres_db_container
+    image: postgres:16
+    container_name: postgres_db_container_bp
     env_file:
-      - .env
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-    ports:
-      - "${POSTGRES_PORT}:${POSTGRES_PORT}"
+      - ./app/.env
     volumes:
       - ./volumes/postgres_data:/var/lib/postgresql/data
-    networks:
-      - app_network
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - dev
+      - test
+      - prod
 
   fastapi_app:
-    container_name: fastapi_app_container
-    build:
-      context: ./app
-      dockerfile: Dockerfile
-    env_file:
-      - .env
-    environment:
-      DATABASE_URL: ${DATABASE_URL}
-      FASTAPI_APP_HOST: ${FASTAPI_APP_HOST}
-      FASTAPI_APP_PORT: ${FASTAPI_APP_PORT}
-    ports:
-      - "${FASTAPI_APP_PORT}:${FASTAPI_APP_PORT}"
+    build: *common-build
+    container_name: fastapi_app_container_bp
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
     volumes:
       - ./app:/app
-      - ./volumes/fastapi_app_data:/app_data # Example volume for app-specific data if needed
-    depends_on:
-      - postgres_db
-    networks:
-      - app_network
+      - ./volumes/fastapi_app_data:/app_data
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./app/.env
+    depends_on: *common-depends_on_postgres
+    profiles:
+      - prod
 
-networks:
-  app_network:
-    driver: bridge
+  fastapi_app_dev:
+    build: *common-build
+    container_name: fastapi_app_dev_container_bp
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ./app:/app
+      - ./volumes/fastapi_app_data:/app_data
+    ports:
+      - "8001:8000"
+    env_file:
+      - ./app/.env
+    depends_on: *common-depends_on_postgres
+    profiles:
+      - dev
+
+  test_runner:
+    build: *common-build
+    container_name: test_runner_container_bp
+    command: ["pytest", "/app/tests"]
+    volumes:
+      - ./app:/app
+    env_file:
+      - ./app/.env
+    depends_on: *common-depends_on_postgres
+    environment:
+      PYTHONUNBUFFERED: "1"
+    profiles:
+      - test
 
 volumes:
-  postgres_data:
+  postgres_data_bp:
     driver: local
     driver_opts:
       type: 'none'
       o: 'bind'
-      device: '${PWD}/volumes/postgres_data' # Ensures it's within backup_postgres
-  fastapi_app_data:
+      device: '${PWD}/volumes/postgres_data'
+  fastapi_app_data_bp:
     driver: local
     driver_opts:
       type: 'none'
       o: 'bind'
-      device: '${PWD}/volumes/fastapi_app_data' # Ensures it's within backup_postgres
+      device: '${PWD}/volumes/fastapi_app_data'
