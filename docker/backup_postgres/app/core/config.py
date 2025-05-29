@@ -1,5 +1,5 @@
 import os
-from typing import Optional
+from typing import Optional, List
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -8,8 +8,10 @@ class Settings(BaseSettings):
 
     Uses pydantic-settings to load from environment variables and .env files.
     """
-    PROJECT_NAME: str = "PostgreSQL to InfluxDB-like API"
+    PROJECT_NAME: str = "PostgreSQL Data Explorer API"
     API_V1_STR: str = "/api/v1"
+    API_V2_STR: str = "/api/v2"
+    ACTIVE_API_VERSIONS: List[str] = ["v2"]
 
     # PostgreSQL settings
     POSTGRES_USER: str

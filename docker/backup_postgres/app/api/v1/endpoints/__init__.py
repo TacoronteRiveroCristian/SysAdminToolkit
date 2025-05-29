@@ -1,1 +1,1 @@
-# This file makes the 'endpoints' directory a Python package.
+# This file makes the 'endpoints' directory a Python package for API v1.
