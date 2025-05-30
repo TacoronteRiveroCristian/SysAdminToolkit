@@ -1,18 +1,18 @@
-# YAML Anchors for common configurations
-x-common-build: &common-build
-  context: ./app
-  dockerfile: Dockerfile
-
-x-common-depends_on_postgres: &common-depends_on_postgres
-  postgres_db:
-    condition: service_healthy
+x-fastapi-app-base-image: &fastapi-app-base-image
+  image: fast-api-app-base-image
+  build:
+    context: ./app
+    dockerfile: Dockerfile
+  env_file:
+    - .env
+  restart: unless-stopped
+  networks:
+    - backup-postgres
 
 services:
   postgres_db:
     image: postgres:16
     container_name: postgres_db_container_bp
-    env_file:
-      - ./app/.env
     volumes:
       - ./volumes/postgres_data:/var/lib/postgresql/data
     ports:
@@ -26,48 +26,48 @@ services:
       - dev
       - test
       - prod
+    networks:
+      - backup-postgres
 
-  fastapi_app:
-    build: *common-build
-    container_name: fastapi_app_container_bp
+  fastapi-app-prod:
+    <<: *fastapi-app-base-image
+    container_name: fastapi-app-prod
     command: uvicorn main:app --host 0.0.0.0 --port 8000
     volumes:
       - ./app:/app
       - ./volumes/fastapi_app_data:/app_data
     ports:
       - "8000:8000"
-    env_file:
-      - ./app/.env
-    depends_on: *common-depends_on_postgres
+    depends_on:
+      postgres_db:
+        condition: service_healthy
     profiles:
       - prod
 
-  fastapi_app_dev:
-    build: *common-build
-    container_name: fastapi_app_dev_container_bp
+  fastapi-app-dev:
+    <<: *fastapi-app-base-image
+    container_name: fastapi-app-dev
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     volumes:
       - ./app:/app
       - ./volumes/fastapi_app_data:/app_data
     ports:
       - "8001:8000"
-    env_file:
-      - ./app/.env
-    depends_on: *common-depends_on_postgres
+    depends_on:
+      postgres_db:
+        condition: service_healthy
     profiles:
       - dev
 
-  test_runner:
-    build: *common-build
-    container_name: test_runner_container_bp
+  fastapi-test-runner:
+    <<: *fastapi-app-base-image
+    container_name: fastapi-test-runner
     command: ["pytest", "/app/tests"]
     volumes:
       - ./app:/app
-    env_file:
-      - ./app/.env
-    depends_on: *common-depends_on_postgres
-    environment:
-      PYTHONUNBUFFERED: "1"
+    depends_on:
+      postgres_db:
+        condition: service_healthy
     profiles:
       - test
 
@@ -84,3 +84,8 @@ volumes:
       type: 'none'
       o: 'bind'
       device: '${PWD}/volumes/fastapi_app_data'
+
+networks:
+  backup-postgres:
+    driver: bridge
+    name: backup-postgres
