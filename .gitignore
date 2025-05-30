@@ -1,7 +1,4 @@
-**/meta.db
-**/data/
-**/*.data
-# Local environment files
+**/volumes/
 .env
 .env.*
 !.env-example

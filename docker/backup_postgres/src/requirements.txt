@@ -1,2 +1,0 @@
-PyYAML>=5.0
-python-crontab>=2.5
