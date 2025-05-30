@@ -1,0 +1,60 @@
+version: "3.8"
+
+x-common-env-vars: &common-env-vars
+  # Define common environment variables here if needed in the future
+  # EXAMPLE_VAR: "example_value"
+
+
+x-restart-policy: &restart-policy
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:${POSTGRES_VERSION:-16-alpine}
+    container_name: ${STACK_NAME:-my_postgres_stack}_postgres
+    ports:
+      - "${POSTGRES_PORT_HOST:-5432}:${POSTGRES_PORT_CONTAINER:-5432}"
+    volumes:
+      - ./volumes/${STACK_NAME:-my_postgres_stack}_postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-adminpassword}
+      POSTGRES_DB: ${POSTGRES_DB:-mydatabase}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    networks:
+      - app_net
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $${POSTGRES_USER:-admin} -d $${POSTGRES_DB:-mydatabase}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    <<: *restart-policy
+
+  pgadmin:
+    image: dpage/pgadmin4:${PGADMIN_VERSION:-latest}
+    container_name: ${STACK_NAME:-my_postgres_stack}_pgadmin
+    user: "5050:5050"
+    ports:
+      - "${PGADMIN_PORT_HOST:-5050}:${PGADMIN_PORT_CONTAINER:-80}"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@example.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-adminpassword}
+      PGADMIN_LISTEN_PORT: ${PGADMIN_PORT_CONTAINER:-80}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - app_net
+    volumes:
+      - ./volumes/${STACK_NAME:-my_postgres_stack}_pgadmin_data:/var/lib/pgadmin
+    <<: *restart-policy
+
+networks:
+  app_net: # Static key for the network
+    driver: bridge
+    name: ${STACK_NAME:-my_postgres_stack}_network

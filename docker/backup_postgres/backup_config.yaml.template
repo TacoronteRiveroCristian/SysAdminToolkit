@@ -1,0 +1,111 @@
+# PostgreSQL Backup Configuration
+# ---------------------------
+# This file contains ALL configuration for the PostgreSQL backup service.
+# Copy this file to backup_config.yaml and customize it to your needs.
+
+# Global configuration
+global:
+  # Docker network for containers
+  # Example: 'postgres_network' - Must match the network where PostgreSQL containers are running
+  # If containers are on different networks, create a shared network with:
+  # docker network create postgres_network
+  network: postgres_network
+
+# Source PostgreSQL configuration
+source:
+  # Hostname or IP of the source PostgreSQL server (required)
+  # Example: 'source-postgres' for a Docker container
+  # Example: '192.168.1.100' for a remote server
+  host: source-postgres
+
+  # Port of the source PostgreSQL server (required)
+  port: 5432
+
+  # User for connecting to the source PostgreSQL server (required)
+  user: "postgres"
+
+  # Password for the source PostgreSQL user (required)
+  # Consider using environment variables or Docker secrets for sensitive data
+  password: "password"
+
+  # List of databases to back up
+  # Each entry must have:
+  #   - name: Name of the database in the source
+  #   - destination_db_name: (Optional) Name for the database in the destination. If omitted, uses the source name.
+  # Example: To back up only the 'telegraf' DB with the same name:
+  # databases:
+  #   - name: telegraf
+  # To back up 'app_data' and rename it to 'app_data_backup' in the destination:
+  # databases:
+  #   - name: app_data
+  #     destination_db_name: app_data_backup
+  databases:
+    - name: metrics
+      destination_db_name: metrics_backup
+    - name: appdb
+
+# Destination PostgreSQL configuration
+destination:
+  # Hostname or IP of the destination PostgreSQL server (required)
+  host: destination-postgres
+
+  # Port of the destination PostgreSQL server (required)
+  port: 5432
+
+  # User for connecting to the destination PostgreSQL server (required)
+  user: "postgres"
+
+  # Password for the destination PostgreSQL user (required)
+  password: "password"
+
+# Backup options
+options:
+  # Path to the log file
+  # Ensure this path exists and has write permissions
+  # For Docker: this path is INSIDE the container, consider using a volume
+  log_file: /var/log/backup_postgres/backup.log
+
+  # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  # DEBUG: shows detailed information for debugging
+  # INFO: general information about execution (recommended)
+  # WARNING: only warnings and errors
+  # ERROR: only errors
+  # CRITICAL: only critical errors
+  log_level: INFO
+
+  # Cron expression for scheduled backups
+  # Leave empty for a single on-demand backup
+  # Common examples:
+  # "0 0 * * *"     - Daily at midnight
+  # "0 0 * * 0"     - Weekly (Sunday at midnight)
+  # "0 0 1 * *"     - Monthly (day 1 at midnight)
+  # "0 */6 * * *"   - Every 6 hours
+  # "0 8-18 * * 1-5" - Every hour during Mon-Fri work hours
+  backup_schedule: ""
+
+  # Backup strategy (to be implemented)
+  # Possible values: 'full', 'incremental'
+  # 'full': Creates a full dump of the database.
+  # 'incremental': (Future) Backs up changes since the last backup.
+  # strategy: "full"
+
+  # Additional pg_dump options (optional)
+  # Pass any extra pg_dump flags here as a string
+  # Example: "--inserts --column-inserts"
+  # Refer to pg_dump documentation for available options.
+  pg_dump_options: ""
+
+  # Additional pg_restore options (optional)
+  # Pass any extra pg_restore flags here as a string
+  # Example: "--clean --if-exists"
+  # Refer to pg_restore documentation for available options.
+  pg_restore_options: "--clean --if-exists"
+
+  # Compression (optional)
+  # Enable to compress backup files. Reduces disk space but adds CPU overhead.
+  # Values: true / false
+  # compression: false
+
+  # Temporary directory for backup files (inside the container)
+  # Defaults to /tmp if not specified
+  # temp_dir: "/app/temp_backups"
