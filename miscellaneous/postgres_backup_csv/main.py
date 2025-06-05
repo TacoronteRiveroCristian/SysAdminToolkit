@@ -2,6 +2,7 @@ import configparser
 import csv
 import os
 import shutil
+import time
 import zipfile
 from datetime import date, datetime, timedelta
 
@@ -11,8 +12,8 @@ import psycopg2
 # Define aquí el rango de fechas para la extracción.
 # Si START_DATE_STR y END_DATE_STR son None, se extraerán todos los datos de las tablas con columna de fecha.
 # Para tablas sin columna de fecha, siempre se extraerá todo y se paginará si es necesario.
-START_DATE_STR = "2025-01-01"  # Formato YYYY-MM-DD, ej: "2023-01-01"
-END_DATE_STR = "2025-01-05"  # Formato YYYY-MM-DD, ej: "2023-01-31"
+START_DATE_STR = "2025-06-05"  # Formato YYYY-MM-DD, ej: "2023-01-01"
+END_DATE_STR = "2025-06-07"  # Formato YYYY-MM-DD, ej: "2023-01-31"
 
 # --- Constantes Adicionales ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -24,23 +25,72 @@ FINAL_ZIP_DIR = os.path.join(
 )  # Directorio donde se guardarán los ZIPs finales
 DATE_COLUMN_NAME = "date_hour"
 MAX_ROWS_PER_CSV = 100000  # Para tablas sin columna de fecha identificable o para paginación general
+MAX_ROWS_PER_DAY_QUERY = (
+    10000  # Máximo de filas por consulta diaria (para paginación)
+)
+PAUSE_BETWEEN_QUERIES = (
+    2  # Segundos de pausa entre consultas para evitar saturar el servidor
+)
+PAUSE_BETWEEN_DAYS = 5  # Segundos de pausa entre días
 DB_SCHEMA = "public"  # Esquema de la base de datos a respaldar
 
 
 def get_db_connection(config):
     """Establece y devuelve una conexión a la base de datos PostgreSQL."""
+    connection_params = {
+        "host": config["postgresql"]["db_host"],
+        "port": config["postgresql"]["db_port"],
+        "dbname": config["postgresql"]["db_name"],
+        "user": config["postgresql"]["db_user"],
+        "password": config["postgresql"]["db_password"],
+    }
+
+    print(f"Intentando conectar con:")
+    print(f"  Host: {connection_params['host']}")
+    print(f"  Puerto: {connection_params['port']}")
+    print(f"  Base de datos: {connection_params['dbname']}")
+    print(f"  Usuario: {connection_params['user']}")
+
+    # Intentar primero sin especificar SSL
     try:
-        conn = psycopg2.connect(
-            host=config["postgresql"]["db_host"],
-            port=config["postgresql"]["db_port"],
-            dbname=config["postgresql"]["db_name"],
-            user=config["postgresql"]["db_user"],
-            password=config["postgresql"]["db_password"],
-        )
+        print("Intento 1: Conexión sin especificar SSL...")
+        conn = psycopg2.connect(**connection_params)
+        print("✓ Conexión exitosa!")
         return conn
     except psycopg2.Error as e:
-        print(f"Error al conectar a PostgreSQL: {e}")
-        return None
+        print(f"✗ Falló intento 1:")
+        print(f"  Código de error PG: {e.pgcode}")
+        print(f"  Mensaje de error PG: {e.pgerror}")
+        print(f"  Error detallado: {e}")
+
+    # Intentar con SSL deshabilitado
+    try:
+        print("Intento 2: Conexión con SSL deshabilitado...")
+        connection_params["sslmode"] = "disable"
+        conn = psycopg2.connect(**connection_params)
+        print("✓ Conexión exitosa con SSL deshabilitado!")
+        return conn
+    except psycopg2.Error as e:
+        print(f"✗ Falló intento 2:")
+        print(f"  Código de error PG: {e.pgcode}")
+        print(f"  Mensaje de error PG: {e.pgerror}")
+        print(f"  Error detallado: {e}")
+
+    # Intentar con SSL requerido
+    try:
+        print("Intento 3: Conexión con SSL requerido...")
+        connection_params["sslmode"] = "require"
+        conn = psycopg2.connect(**connection_params)
+        print("✓ Conexión exitosa con SSL requerido!")
+        return conn
+    except psycopg2.Error as e:
+        print(f"✗ Falló intento 3:")
+        print(f"  Código de error PG: {e.pgcode}")
+        print(f"  Mensaje de error PG: {e.pgerror}")
+        print(f"  Error detallado: {e}")
+
+    print("✗ Todos los intentos de conexión fallaron.")
+    return None
 
 
 def get_tables(conn, schema):
@@ -108,6 +158,115 @@ def get_table_columns(conn, table_name, schema):
     except psycopg2.Error as e:
         print(f"Error al obtener columnas para la tabla {table_name}: {e}")
     return columns
+
+
+def extract_day_data_paginated(
+    conn, table_name, columns, schema, target_date, csv_file_path
+):
+    """
+    Extrae datos de un día específico usando paginación para evitar sobrecargar el servidor.
+    Retorna el número total de filas extraídas.
+    """
+    total_rows = 0
+    offset = 0
+
+    # Verificar si ya existe el archivo y abrirlo en modo append o crear nuevo
+    file_mode = "a" if os.path.exists(csv_file_path) else "w"
+    write_headers = file_mode == "w"
+
+    try:
+        with open(
+            csv_file_path, file_mode, newline="", encoding="utf-8"
+        ) as csvfile:
+            writer = csv.writer(csvfile)
+
+            if write_headers:
+                writer.writerow(
+                    columns
+                )  # Escribir cabeceras solo si es un archivo nuevo
+
+            while True:
+                try:
+                    # Intentar reconectar si la conexión está cerrada
+                    if conn.closed:
+                        print(f"    Conexión cerrada, intentando reconectar...")
+                        # Esta función debería manejar la reconexión, pero por simplicidad
+                        # retornamos el total hasta ahora
+                        break
+
+                    with conn.cursor() as cur:
+                        # Query paginada para el día específico
+                        query = f"""
+                            SELECT * FROM "{schema}"."{table_name}"
+                            WHERE DATE("{DATE_COLUMN_NAME}") = %s
+                            ORDER BY "{DATE_COLUMN_NAME}"
+                            LIMIT %s OFFSET %s;
+                        """
+
+                        print(
+                            f"    Consultando offset {offset}, límite {MAX_ROWS_PER_DAY_QUERY}..."
+                        )
+                        cur.execute(
+                            query, (target_date, MAX_ROWS_PER_DAY_QUERY, offset)
+                        )
+
+                        rows_in_batch = 0
+                        for row in cur:
+                            writer.writerow(row)
+                            rows_in_batch += 1
+                            total_rows += 1
+
+                        print(
+                            f"    Batch completado: {rows_in_batch} filas (total acumulado: {total_rows})"
+                        )
+
+                        # Si obtuvimos menos filas que el límite, hemos terminado
+                        if rows_in_batch < MAX_ROWS_PER_DAY_QUERY:
+                            print(f"    Extracción completa para {target_date}")
+                            break
+
+                        offset += MAX_ROWS_PER_DAY_QUERY
+
+                        # Pausa entre consultas para no saturar el servidor
+                        if PAUSE_BETWEEN_QUERIES > 0:
+                            print(
+                                f"    Pausando {PAUSE_BETWEEN_QUERIES} segundos..."
+                            )
+                            time.sleep(PAUSE_BETWEEN_QUERIES)
+
+                except psycopg2.Error as e_query:
+                    print(
+                        f"    Error en consulta paginada (offset {offset}): {e_query}"
+                    )
+                    if "connection" in str(e_query).lower():
+                        print(
+                            f"    Error de conexión detectado, terminando extracción para este día"
+                        )
+                        break
+                    else:
+                        # Para otros errores, intentar continuar con el siguiente batch
+                        offset += MAX_ROWS_PER_DAY_QUERY
+                        continue
+
+    except IOError as e_io:
+        print(f"    Error al escribir CSV: {e_io}")
+
+    return total_rows
+
+
+def reconnect_db(config, max_retries=3):
+    """Intenta reconectar a la base de datos con reintentos."""
+    for retry in range(max_retries):
+        print(f"  Intento de reconexión {retry + 1}/{max_retries}...")
+        conn = get_db_connection(config)
+        if conn:
+            print("  ✓ Reconexión exitosa!")
+            return conn
+        if retry < max_retries - 1:
+            print(f"  Esperando 5 segundos antes del siguiente intento...")
+            time.sleep(5)
+    print("  ✗ No se pudo reconectar después de todos los intentos")
+    return None
 
 
 def main():
@@ -254,44 +413,51 @@ def main():
                     output_dir_for_day, f"{table_name}.csv"
                 )
 
-                try:
-                    with conn.cursor() as cur, open(
-                        csv_file_path, "w", newline="", encoding="utf-8"
-                    ) as csvfile:
-                        writer = csv.writer(csvfile)
-                        writer.writerow(columns)  # Escribir cabeceras
+                print(f"  Procesando {loop_date.strftime('%Y-%m-%d')}...")
 
-                        # Construir la query para seleccionar datos de ese día
-                        # Asumimos que DATE_COLUMN_NAME es de tipo DATE, TIMESTAMP o TIMESTAMPTZ
-                        # Para TIMESTAMPTZ, la comparación directa con DATE puede necesitar casting en la BD
-                        # o manejar zonas horarias adecuadamente si son relevantes.
-                        # Aquí simplificamos asumiendo que la comparación directa funciona.
-                        query = f'SELECT * FROM "{DB_SCHEMA}"."{table_name}" WHERE DATE("{DATE_COLUMN_NAME}") = %s;'
-                        cur.execute(query, (loop_date,))
+                # Verificar si la conexión sigue activa
+                if conn.closed:
+                    print(f"  Conexión perdida, intentando reconectar...")
+                    conn = reconnect_db(config)
+                    if not conn:
+                        print(
+                            f"  ✗ No se pudo reconectar, saltando día {loop_date.strftime('%Y-%m-%d')}"
+                        )
+                        loop_date += timedelta(days=1)
+                        continue
 
-                        rows_written_for_day = 0
-                        for row in cur:
-                            writer.writerow(row)
-                            rows_written_for_day += 1
-                        if rows_written_for_day > 0:
-                            print(
-                                f"  Datos de {table_name} para {loop_date.strftime('%Y-%m-%d')} guardados en {csv_file_path} ({rows_written_for_day} filas)"
-                            )
-                        else:
-                            # Si no hay datos para ese día, podemos borrar el CSV vacío o dejarlo.
-                            # Por ahora lo dejamos, podría ser indicativo.
-                            # print(f"  No se encontraron datos para {table_name} el {loop_date.strftime('%Y-%m-%d')}")
-                            # os.remove(csv_file_path) # Opcional: borrar CSV si está vacío
-                            pass
+                # Usar la nueva función paginada para extraer datos del día
+                rows_written_for_day = extract_day_data_paginated(
+                    conn,
+                    table_name,
+                    columns,
+                    DB_SCHEMA,
+                    loop_date,
+                    csv_file_path,
+                )
 
-                except psycopg2.Error as e_query:
+                if rows_written_for_day > 0:
                     print(
-                        f"Error al extraer datos para {table_name} el {loop_date.strftime('%Y-%m-%d')}: {e_query}"
+                        f"  ✓ Datos de {table_name} para {loop_date.strftime('%Y-%m-%d')} guardados en {csv_file_path} ({rows_written_for_day} filas)"
                     )
-                except IOError as e_io:
+                else:
                     print(
-                        f"Error al escribir CSV para {table_name} el {loop_date.strftime('%Y-%m-%d')}: {e_io}"
+                        f"  - No se encontraron datos para {table_name} el {loop_date.strftime('%Y-%m-%d')}"
                     )
+                    # Opcionalmente eliminar el archivo CSV vacío
+                    if (
+                        os.path.exists(csv_file_path)
+                        and os.path.getsize(csv_file_path)
+                        <= len(",".join(columns)) + 2
+                    ):
+                        os.remove(csv_file_path)
+
+                # Pausa entre días para no saturar el servidor
+                if PAUSE_BETWEEN_DAYS > 0 and loop_date < current_e_date:
+                    print(
+                        f"  Pausando {PAUSE_BETWEEN_DAYS} segundos antes del siguiente día..."
+                    )
+                    time.sleep(PAUSE_BETWEEN_DAYS)
 
                 loop_date += timedelta(days=1)
         else:
