@@ -3,8 +3,6 @@
 **/.venv/
 **/volumes/
 .env
-.env.*
-!.env-example
 
 # Configuration files
 backup_config.yaml
