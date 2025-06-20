@@ -10,7 +10,7 @@ scrape_configs:
     relabel_configs:
       - source_labels: [__address__]
         target_label: __address__
-        replacement: 'prometheus:9090'
+        replacement: 'host-monitoring-prometheus:9090'
 
   - job_name: 'cadvisor'
     scrape_interval: 5s
@@ -20,7 +20,7 @@ scrape_configs:
     relabel_configs:
       - source_labels: [__address__]
         target_label: __address__
-        replacement: 'cadvisor:8080'
+        replacement: 'host-monitoring-cadvisor:8080'
 
   - job_name: 'node-exporter'
     scrape_interval: 5s
@@ -30,7 +30,7 @@ scrape_configs:
     relabel_configs:
       - source_labels: [__address__]
         target_label: __address__
-        replacement: 'node-exporter:9100'
+        replacement: 'host-monitoring-node-exporter:9100'
 
   - job_name: 'blackbox-icmp'
     metrics_path: /probe
@@ -46,4 +46,4 @@ scrape_configs:
       - source_labels: [__param_target]
         target_label: instance
       - target_label: __address__
-        replacement: 'blackbox-exporter:9115'
+        replacement: 'host-monitoring-blackbox-exporter:9115'
