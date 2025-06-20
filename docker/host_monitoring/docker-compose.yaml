@@ -23,7 +23,7 @@ services:
     restart: unless-stopped
     user: "root"
     ports:
-      - "${GRAFANA_PORT:-3000}:3000"
+      - "${GRAFANA_PORT:-3000}:${GRAFANA_PORT:-3000}"
     volumes:
       - ./grafana/provisioning/:/etc/grafana/provisioning/
       - ./grafana/dashboards/:/etc/grafana/dashboards/
@@ -32,6 +32,7 @@ services:
       - GF_SECURITY_ADMIN_USER=${GF_SECURITY_ADMIN_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD:-admin}
       - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_HTTP_PORT=${GRAFANA_PORT}
     networks:
       - monitoring
     depends_on:
@@ -77,6 +78,7 @@ services:
       - '--path.sysfs=/host/sys'
       - '--path.rootfs=/rootfs'
       - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+      - '--no-collector.netstat'
     networks:
       - monitoring
 
@@ -95,6 +97,25 @@ services:
       - '--path.sysfs=/host/sys'
       - '--path.rootfs=/rootfs'
       - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+      - '--no-collector.netstat'
+      - '--no-collector.arp'
+      - '--no-collector.bcache'
+      - '--no-collector.bonding'
+      - '--no-collector.dmi'
+      - '--no-collector.edac'
+      - '--no-collector.fibrechannel'
+      - '--no-collector.hwmon'
+      - '--no-collector.ipvs'
+      - '--no-collector.mdadm'
+      - '--no-collector.nfs'
+      - '--no-collector.nfsd'
+      - '--no-collector.rapl'
+      - '--no-collector.selinux'
+      - '--no-collector.sockstat'
+      - '--no-collector.systemd'
+      - '--no-collector.tapestats'
+      - '--no-collector.thermal_zone'
+      - '--no-collector.zfs'
     networks:
       - monitoring
 
