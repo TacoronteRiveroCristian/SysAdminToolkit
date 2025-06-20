@@ -22,7 +22,7 @@ scrape_configs:
         target_label: __address__
         replacement: 'cadvisor:8080'
 
-  - job_name: 'cominfra-stg'
+  - job_name: 'node-exporter'
     scrape_interval: 5s
     static_configs:
       - targets:
