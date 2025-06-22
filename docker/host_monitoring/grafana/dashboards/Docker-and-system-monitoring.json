@@ -25,7 +25,7 @@
         {
             "datasource": {
                 "type": "prometheus",
-                "uid": "PBFA97CFB590B2093"
+                "uid": "${PROMETHEUS_DS}"
             },
             "description": "Número total de contenedores en ejecución.",
             "fieldConfig": {
@@ -69,7 +69,7 @@
                 {
                     "datasource": {
                         "type": "prometheus",
-                        "uid": "PBFA97CFB590B2093"
+                        "uid": "${PROMETHEUS_DS}"
                     },
                     "expr": "count(container_last_seen{image!=\"\"})",
                     "refId": "A"
@@ -81,7 +81,7 @@
         {
             "datasource": {
                 "type": "prometheus",
-                "uid": "PBFA97CFB590B2093"
+                "uid": "${PROMETHEUS_DS}"
             },
             "description": "Suma del uso de memoria de todos los contenedores.",
             "fieldConfig": {
@@ -136,7 +136,7 @@
                 {
                     "datasource": {
                         "type": "prometheus",
-                        "uid": "PBFA97CFB590B2093"
+                        "uid": "${PROMETHEUS_DS}"
                     },
                     "expr": "sum(container_memory_usage_bytes{image!=\"\"})",
                     "refId": "A"
@@ -148,7 +148,7 @@
         {
             "datasource": {
                 "type": "prometheus",
-                "uid": "PBFA97CFB590B2093"
+                "uid": "${PROMETHEUS_DS}"
             },
             "description": "Suma del uso de CPU de todos los contenedores, como porcentaje del total de los cores.",
             "fieldConfig": {
@@ -203,7 +203,7 @@
                 {
                     "datasource": {
                         "type": "prometheus",
-                        "uid": "PBFA97CFB590B2093"
+                        "uid": "${PROMETHEUS_DS}"
                     },
                     "expr": "sum(rate(container_cpu_usage_seconds_total{image!=\"\"}[5m])) * 100",
                     "refId": "A"
@@ -215,7 +215,7 @@
         {
             "datasource": {
                 "type": "prometheus",
-                "uid": "PBFA97CFB590B2093"
+                "uid": "${PROMETHEUS_DS}"
             },
             "description": "Suma del espacio en disco utilizado por todos los volúmenes de Docker.",
             "fieldConfig": {
@@ -270,7 +270,7 @@
                 {
                     "datasource": {
                         "type": "prometheus",
-                        "uid": "PBFA97CFB590B2093"
+                        "uid": "${PROMETHEUS_DS}"
                     },
                     "expr": "sum(node_filesystem_size_bytes{mountpoint=~\"/var/lib/docker/volumes/.+\"}) - sum(node_filesystem_avail_bytes{mountpoint=~\"/var/lib/docker/volumes/.+\"})",
                     "refId": "A"
@@ -295,7 +295,7 @@
         {
             "datasource": {
                 "type": "prometheus",
-                "uid": "PBFA97CFB590B2093"
+                "uid": "${PROMETHEUS_DS}"
             },
             "description": "Muestra el uso de CPU a lo largo del tiempo para cada contenedor individual.",
             "fieldConfig": {
@@ -381,7 +381,7 @@
                 {
                     "datasource": {
                         "type": "prometheus",
-                        "uid": "PBFA97CFB590B2093"
+                        "uid": "${PROMETHEUS_DS}"
                     },
                     "expr": "sum(rate(container_cpu_usage_seconds_total{image!=\"\", name!=\"\"}[$interval])) by (name) * 100",
                     "hide": false,
@@ -399,7 +399,7 @@
         {
             "datasource": {
                 "type": "prometheus",
-                "uid": "PBFA97CFB590B2093"
+                "uid": "${PROMETHEUS_DS}"
             },
             "description": "Muestra el uso de memoria (RSS) a lo largo del tiempo para cada contenedor.",
             "fieldConfig": {
@@ -485,7 +485,7 @@
                 {
                     "datasource": {
                         "type": "prometheus",
-                        "uid": "PBFA97CFB590B2093"
+                        "uid": "${PROMETHEUS_DS}"
                     },
                     "expr": "sum(container_memory_usage_bytes{image!=\"\", name!=\"\"}) by (name)",
                     "hide": false,
@@ -501,7 +501,7 @@
         {
             "datasource": {
                 "type": "prometheus",
-                "uid": "PBFA97CFB590B2093"
+                "uid": "${PROMETHEUS_DS}"
             },
             "description": "Los 5 contenedores que más CPU han consumido en los últimos 5 minutos.",
             "fieldConfig": {
@@ -582,7 +582,7 @@
                 {
                     "datasource": {
                         "type": "prometheus",
-                        "uid": "PBFA97CFB590B2093"
+                        "uid": "${PROMETHEUS_DS}"
                     },
                     "expr": "topk(5, sort_desc(sum(rate(container_cpu_usage_seconds_total{image!=\"\", name!=\"\"}[5m])) by (name)) * 100)",
                     "format": "table",
@@ -596,7 +596,7 @@
         {
             "datasource": {
                 "type": "prometheus",
-                "uid": "PBFA97CFB590B2093"
+                "uid": "${PROMETHEUS_DS}"
             },
             "description": "Los 5 contenedores que más memoria están utilizando actualmente.",
             "fieldConfig": {
@@ -677,7 +677,7 @@
                 {
                     "datasource": {
                         "type": "prometheus",
-                        "uid": "PBFA97CFB590B2093"
+                        "uid": "${PROMETHEUS_DS}"
                     },
                     "expr": "topk(5, sort_desc(sum(container_memory_usage_bytes{image!=\"\", name!=\"\"}) by (name)))",
                     "format": "table",
@@ -691,7 +691,7 @@
         {
             "datasource": {
                 "type": "prometheus",
-                "uid": "PBFA97CFB590B2093"
+                "uid": "${PROMETHEUS_DS}"
             },
             "description": "Tasa de datos recibidos por cada contenedor.",
             "fieldConfig": {
@@ -774,7 +774,7 @@
                 {
                     "datasource": {
                         "type": "prometheus",
-                        "uid": "PBFA97CFB590B2093"
+                        "uid": "${PROMETHEUS_DS}"
                     },
                     "expr": "sum(rate(container_network_receive_bytes_total{image!=\"\", name!=\"\"}[$interval])) by (name)",
                     "intervalFactor": 2,
@@ -789,7 +789,7 @@
         {
             "datasource": {
                 "type": "prometheus",
-                "uid": "PBFA97CFB590B2093"
+                "uid": "${PROMETHEUS_DS}"
             },
             "description": "Tasa de datos enviados por cada contenedor.",
             "fieldConfig": {
@@ -872,7 +872,7 @@
                 {
                     "datasource": {
                         "type": "prometheus",
-                        "uid": "PBFA97CFB590B2093"
+                        "uid": "${PROMETHEUS_DS}"
                     },
                     "expr": "sum(rate(container_network_transmit_bytes_total{image!=\"\", name!=\"\"}[$interval])) by (name)",
                     "intervalFactor": 2,
@@ -900,7 +900,7 @@
         {
             "datasource": {
                 "type": "prometheus",
-                "uid": "PBFA97CFB590B2093"
+                "uid": "${PROMETHEUS_DS}"
             },
             "description": "Muestra el espacio en disco utilizado por los volúmenes de Docker. Utiliza métricas de Node Exporter, por lo que requiere que los volúmenes estén en una ruta monitorizada (ej. /var/lib/docker/volumes).",
             "fieldConfig": {
@@ -1004,7 +1004,7 @@
                 {
                     "datasource": {
                         "type": "prometheus",
-                        "uid": "PBFA97CFB590B2093"
+                        "uid": "${PROMETHEUS_DS}"
                     },
                     "expr": "node_filesystem_size_bytes{mountpoint=~\"/var/lib/docker/volumes/.+\"} - node_filesystem_avail_bytes{mountpoint=~\"/var/lib/docker/volumes/.+\"}",
                     "format": "table",
@@ -1016,7 +1016,7 @@
                 {
                     "datasource": {
                         "type": "prometheus",
-                        "uid": "PBFA97CFB590B2093"
+                        "uid": "${PROMETHEUS_DS}"
                     },
                     "expr": "node_filesystem_size_bytes{mountpoint=~\"/var/lib/docker/volumes/.+\"}",
                     "format": "table",
@@ -1028,7 +1028,7 @@
                 {
                     "datasource": {
                         "type": "prometheus",
-                        "uid": "PBFA97CFB590B2093"
+                        "uid": "${PROMETHEUS_DS}"
                     },
                     "expr": "100 - (node_filesystem_avail_bytes{mountpoint=~\"/var/lib/docker/volumes/.+\"} / node_filesystem_size_bytes{mountpoint=~\"/var/lib/docker/volumes/.+\"} * 100)",
                     "format": "table",
@@ -1079,6 +1079,23 @@
     "tags": [],
     "templating": {
         "list": [
+            {
+                "current": {
+                    "text": "Prometheus",
+                    "value": "Prometheus"
+                },
+                "hide": 0,
+                "includeAll": false,
+                "label": "Prometheus",
+                "multi": false,
+                "name": "PROMETHEUS_DS",
+                "options": [],
+                "query": "prometheus",
+                "refresh": 1,
+                "regex": "",
+                "skipUrlSync": false,
+                "type": "datasource"
+            },
             {
                 "auto": true,
                 "auto_count": 50,
