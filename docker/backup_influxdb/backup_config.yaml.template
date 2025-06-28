@@ -14,10 +14,17 @@ global:
 # Configuración InfluxDB origen
 source:
   # URL del servidor InfluxDB origen (requerido)
-  # Formato: http://hostname:puerto
+  # Formato: http://hostname:puerto o https://hostname:puerto
   # Ejemplo: 'http://source-influxdb:8086' para contenedor Docker
   # Ejemplo: 'http://192.168.1.100:8086' para servidor remoto
   url: http://source-influxdb:8086
+
+  # Habilitar SSL/TLS para la conexión de origen
+  # Poner a 'true' si la URL empieza por https://
+  ssl: false
+  # Verificar el certificado SSL del servidor de origen.
+  # Recomendado 'true' en producción, 'false' para certificados autofirmados.
+  verify_ssl: true
 
   # Lista de bases de datos a respaldar
   # Cada entrada debe tener:
@@ -61,6 +68,11 @@ destination:
   # Puede ser el mismo servidor que el origen (usando otra base de datos)
   # o un servidor completamente diferente
   url: http://destination-influxdb:8086
+
+  # Habilitar SSL/TLS para la conexión de destino
+  ssl: false
+  # Verificar el certificado SSL del servidor de destino
+  verify_ssl: true
 
   # Autenticación (si es necesaria)
   # Configura según los requisitos del servidor destino
@@ -127,75 +139,55 @@ measurements:
 
 # Opciones de backup
 options:
-  # Timeout del cliente en segundos
-  # Tiempo máximo de espera para conexiones HTTP
-  # Aumenta este valor si tienes conexiones lentas o conjuntos de datos grandes
+  # Modo de backup: 'incremental' o 'range'.
+  # - 'incremental': Copia datos nuevos desde la última marca de tiempo encontrada en el destino.
+  #                  Diseñado para ejecuciones periódicas (usando 'schedule').
+  # - 'range': Copia datos para un rango de fechas específico en una sola ejecución.
+  #            El script se detendrá después de completar el backup.
+  backup_mode: incremental
+
+  # --- Configuración para modo 'range' (backup de un periodo específico) ---
+  # Se utiliza solo si backup_mode es 'range'. El script se ejecuta una vez y termina.
+  range:
+    # Fecha de inicio del backup (formato ISO 8601: YYYY-MM-DDTHH:MM:SSZ). Requerido.
+    start_date: "2023-01-01T00:00:00Z"
+    # Fecha de fin del backup (formato ISO 8601: YYYY-MM-DDTHH:MM:SSZ). Requerido.
+    end_date: "2023-12-31T23:59:59Z"
+
+  # --- Configuración para modo 'incremental' (backup continuo) ---
+  # Se utiliza solo si backup_mode es 'incremental'.
+  incremental:
+    # Umbral para mediciones obsoletas. Si el último dato en el destino es más antiguo
+    # que este umbral, la medición se ignora para no realizar consultas innecesarias.
+    # Unidades válidas: s, m, h, d, w, M (meses), y (años). Ejemplo: "6M" para 6 meses.
+    obsolete_threshold: "1y"
+
+    # Expresión cron para backups programados.
+    # Si se deja vacío, se ejecutará una sola vez en modo incremental.
+    # Ejemplos: "0 0 * * *" (diario), "0 */6 * * *" (cada 6 horas).
+    schedule: ""
+
+  # --- Opciones generales (aplicables a ambos modos) ---
+  # Timeout del cliente en segundos para conexiones HTTP.
   timeout_client: 20
 
-  # Días para dividir los datos al paginar conjuntos grandes
-  # Para bases de datos muy grandes, este valor divide las consultas por días
-  # para evitar problemas de memoria
-  # Ejemplo:
-  # - Valor 1: procesa datos día por día (más seguro para bases grandes, más lento)
-  # - Valor 30: procesa datos en chunks de 30 días (más rápido, requiere más memoria)
+  # Número de reintentos si una consulta o escritura falla por un error de red.
+  # Poner a 0 para deshabilitar los reintentos.
+  retries: 3
+
+  # Segundos de espera entre cada reintento.
+  retry_delay: 5
+
+  # Días para dividir las consultas grandes y evitar problemas de memoria.
+  # Un valor más pequeño (ej. 1) es más seguro para BBDD muy grandes, pero más lento.
+  # Un valor mayor (ej. 30) es más rápido pero consume más memoria.
   days_of_pagination: 7
 
-  # Configuración de rango temporal
-  # Estas opciones permiten definir qué rango de datos será respaldado
-  # Si no se especifica ninguna, se respaldarán todos los datos disponibles
-
-  # OPCIÓN 1: Fecha de inicio específica (ISO 8601: YYYY-MM-DDTHH:MM:SSZ)
-  # Ejemplo: "2023-01-01T00:00:00Z" - Respaldar desde 1 de Enero de 2023
-  # Si se especifica sin end_date, el backup incluirá datos desde esta fecha hasta ahora
-  start_date: ""
-
-  # OPCIÓN 2: Fecha de fin específica (ISO 8601: YYYY-MM-DDTHH:MM:SSZ)
-  # Ejemplo: "2023-12-31T23:59:59Z" - Respaldar hasta 31 de Diciembre de 2023
-  # Solo se usa si start_date está definido, para crear un rango completo de fechas
-  end_date: ""
-
-  # OPCIÓN 3: Periodo relativo
-  # Puedes usar un periodo relativo de dos formas:
-
-  # 3.1: Con backup_period solo (sin start_date/end_date):
-  # Respaldará datos desde "ahora - periodo" hasta "ahora"
-  # Ejemplos: "7d" (últimos 7 días), "3w" (últimas 3 semanas), "6M" (últimos 6 meses)
-
-  # 3.2: Con start_date + backup_period:
-  # Respaldará datos desde start_date hasta "start_date + periodo"
-  # Ejemplo: start_date: "2023-01-01T00:00:00Z", backup_period: "30d"
-  # Respaldará desde el 1 de Enero de 2023 hasta el 31 de Enero de 2023
-
-  # Unidades válidas: s (segundos), m (minutos), h (horas), d (días),
-  #                  w (semanas), M (meses), y (años)
-  backup_period: ""
-
-  # OPCIÓN 4: Ventana de datos (tamaño fijo de datos)
-  # Similar a backup_period, pero se aplicará en cada ejecución
-  # Útil para mantener un historial constante (ej: siempre los últimos 7 días)
-  # Si se especifica, cada backup mantendrá solo esta ventana de datos
-  # NOTA: Esta opción borrará datos antiguos en el destino
-  data_window: ""
-
-  # Ruta al archivo de log
-  # Asegúrate de que esta ruta exista y tenga permisos de escritura
-  # Para Docker: esta ruta es DENTRO del contenedor, considera usar un volumen
+  # Ruta al archivo de log dentro del contenedor.
+  # Asegúrate de que esta ruta exista y tenga permisos de escritura.
   log_file: /var/log/backup_influxdb/backup.log
 
   # Nivel de log: DEBUG, INFO, WARNING, ERROR, CRITICAL
-  # DEBUG: muestra información detallada para depuración
-  # INFO: información general sobre la ejecución (recomendado)
-  # WARNING: solo advertencias y errores
-  # ERROR: solo errores
-  # CRITICAL: solo errores críticos
+  # DEBUG: muy detallado.
+  # INFO: recomendado para operación normal.
   log_level: INFO
-
-  # Expresión cron para backups programados
-  # Dejar vacío para backup único bajo demanda
-  # Ejemplos comunes:
-  # "0 0 * * *"     - Diario a medianoche
-  # "0 0 * * 0"     - Semanal (domingo a medianoche)
-  # "0 0 1 * *"     - Mensual (día 1 a medianoche)
-  # "0 */6 * * *"   - Cada 6 horas
-  # "0 8-18 * * 1-5" - Cada hora en horario laboral L-V
-  backup_schedule: ""

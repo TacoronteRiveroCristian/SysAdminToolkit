@@ -1,0 +1,72 @@
+{
+    "name": "Backup InfluxDB DEV Container",
+    "dockerComposeFile": [
+        "../../docker/backup_influxdb/docker-compose.yaml"
+    ],
+    "service": "sysadmintoolkit-backup-service-dev",
+    "workspaceFolder": "/app",
+    "runServices": [
+        "sysadmintoolkit-backup-service-dev"
+    ],
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python",
+                "ms-python.vscode-pylance",
+                "ms-toolsai.jupyter",
+                "yzhang.markdown-all-in-one",
+                "ms-python.black-formatter",
+                "njpwerner.autodocstring",
+                "ms-python.isort",
+                "ms-python.pylint",
+                "ms-python.debugpy",
+                "donjayamanne.python-extension-pack",
+                "KevinRose.vsc-python-indent",
+                "ShaneLiesegang.vscode-simple-icons-rev",
+                "atomiks.moonlight",
+                "MermaidChart.vscode-mermaid-chart"
+            ],
+            "settings": {
+                "workbench.colorTheme": "Moonlight Italic",
+                "editor.formatOnSave": true,
+                "terminal.integrated.fontSize": 12,
+                "terminal.integrated.defaultProfile.linux": "bash",
+                "terminal.integrated.cursorBlinking": true,
+                "terminal.integrated.copyOnSelection": true,
+                "terminal.integrated.scrollback": 5000,
+                "python.defaultInterpreterPath": "/usr/local/bin/python3",
+                "python.analysis.extraPaths": [
+                    "/app"
+                ],
+                "python.analysis.autoSearchPaths": true,
+                "python.analysis.autoImportCompletions": true,
+                "python.terminal.activateEnvironment": false,
+                "python.linting.enabled": true,
+                "python.linting.pylintEnabled": true,
+                "python.formatting.provider": "black",
+                "python.analysis.typeCheckingMode": "basic",
+                // Arguments for linters and formatters
+                "[python]": {
+                    "editor.defaultFormatter": "ms-python.black-formatter",
+                    "editor.codeActionsOnSave": {
+                        "source.organizeImports": "explicit"
+                    }
+                },
+                "isort.args": [
+                    "--settings-path",
+                    "/app/"
+                ],
+                "pylint.args": [
+                    "--rcfile=/app/.pylintrc"
+                ],
+                "mypy-type-checker.args": [
+                    "--config-file=/app/mypy.ini"
+                ]
+            }
+        }
+    },
+    "containerEnv": {
+        "PYTHONPATH": "/app"
+    },
+    "postCreateCommand": "pip install --user pylint isort mypy black debugpy"
+}

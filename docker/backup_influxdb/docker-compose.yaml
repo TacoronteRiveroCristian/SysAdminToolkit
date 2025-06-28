@@ -1,9 +1,16 @@
-# Load variables from .env file
-# Create this file by copying src/.env-example to .env and modifying as needed
+### Shared configuration for all services backup ###
+x-sysadmintoolkit-backup-service: &sysadmintoolkit-backup-service
+  build:
+    context: .
+    dockerfile: backup-influxdb.dockerfile
+  volumes:
+    - ./volumes/backup_logs:/var/log/backup_influxdb
+  networks:
+    - backup_network
 
+### Services ###
 services:
-  # InfluxDB server for development/testing
-  influxdb:
+  sysadmintoolkit-influxdb: # InfluxDB server for development/testing
     image: influxdb:1.8
     container_name: sysadmintoolkit-influxdb
     ports:
@@ -18,22 +25,20 @@ services:
     networks:
       - backup_network
 
-  # Backup service
-  backup-service:
-    container_name: sysadmintoolkit-backup-service
-    build:
-      context: .
-      dockerfile: backup_influxdb.dockerfile
-    # Environment variables are loaded from .env file
-    # and can be overridden here if needed
+  sysadmintoolkit-backup-service-dev: # Backup service for development
+    container_name: sysadmintoolkit-backup-service-dev
+    <<: *sysadmintoolkit-backup-service
     volumes:
-      - ./backup_config.yaml:/app/backup_config.yaml
       - ./volumes/backup_logs:/var/log/backup_influxdb
+      - ./:/app/
     profiles:
       - development
+
+  sysadmintoolkit-backup-service-prod: # Backup service for production
+    container_name: sysadmintoolkit-backup-service-prod
+    <<: *sysadmintoolkit-backup-service
+    profiles:
       - production
-    networks:
-      - backup_network
     command: >
       sh -c "if grep -q 'backup_schedule:.*[^\"[:space:]]' /app/backup_config.yaml; then
                python /app/backup_influxdb_cron.py;
@@ -41,6 +46,7 @@ services:
                python /app/backup_influxdb.py;
              fi"
 
+### Networks ###
 networks:
   backup_network:
     driver: bridge

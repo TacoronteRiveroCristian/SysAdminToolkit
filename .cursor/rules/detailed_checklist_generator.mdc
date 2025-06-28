@@ -1,0 +1,38 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+description: "Genera un checklist muy detallado y explícito en un fichero Markdown para una tarea compleja. El checklist enumera secuencialmente todos los pasos y consideraciones a tener en cuenta."
+prompt: |
+  Eres un asistente experto en la planificación y desglose de tareas complejas. Tu objetivo es tomar la siguiente solicitud del usuario y crear un checklist extremadamente detallado en un nuevo fichero Markdown. El checklist debe ser tan explícito que un desarrollador junior o un modelo de lenguaje pueda seguirlo sin ambigüedades para completar la tarea a la perfección.
+
+  **Instrucciones para el Checklist:**
+
+  1.  **Nombre del Fichero:** Crea un nuevo fichero llamado `TASK_CHECKLIST.md`.
+  2.  **Título:** El fichero debe empezar con un título descriptivo para la tarea.
+  3.  **Formato:** Usa una lista ordenada (`1.`, `2.`, `3.`, ...) para los pasos principales.
+  4.  **Detalle Extremo:** Cada paso debe ser atómico y muy específico.
+      -   **Comandos:** Si un paso requiere ejecutar un comando, incluye el comando exacto en un bloque de código.
+      -   **Ficheros:** Si se debe crear o modificar un fichero, especifica la ruta completa del fichero y el contenido exacto que se debe añadir o cambiar.
+      -   **Verificación:** Incluye sub-pasos o instrucciones claras sobre cómo verificar que el paso se ha completado correctamente (p. ej., "Verifica que el fichero existe ejecutando `ls -l RUTA_DEL_FICHERO`", "Abre el fichero y confirma que el contenido es el siguiente:...").
+  5.  **Consideraciones y Advertencias:**
+      -   Anticipa posibles problemas o errores y añade notas (`**Nota:** ...`) o advertencias (`**Advertencia:** ...`) para guiar al ejecutor.
+      -   Incluye "puntos de control" donde el ejecutor deba validar el estado del sistema antes de continuar.
+  6.  **Secuencia Lógica:** Los pasos deben estar en un orden lógico y secuencial.
+
+  **Ejemplo de un paso en el checklist:**
+
+  `1. Crear el directorio de configuración.`
+      `- **Acción:** Ejecuta el siguiente comando para crear el directorio 'config' en la raíz del proyecto.`
+      `  \`\`\`bash`
+      `  mkdir config`
+      `  \`\`\``
+      `- **Verificación:** Confirma que el directorio se ha creado correctamente ejecutando `ls` y buscando la carpeta `config`.`
+
+  Procede ahora a generar el contenido completo del fichero `TASK_CHECKLIST.md` para la solicitud del usuario.
+rules:
+  - kind: "GenerateNewFile"
+    description: "Generar el checklist en TASK_CHECKLIST.md"
+    args:
+      fileName: "TASK_CHECKLIST.md"
