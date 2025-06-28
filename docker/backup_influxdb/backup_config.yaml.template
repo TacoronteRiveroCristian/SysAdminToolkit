@@ -183,11 +183,26 @@ options:
   # Un valor mayor (ej. 30) es más rápido pero consume más memoria.
   days_of_pagination: 7
 
-  # Ruta al archivo de log dentro del contenedor.
-  # Asegúrate de que esta ruta exista y tenga permisos de escritura.
-  log_file: /var/log/backup_influxdb/backup.log
+  # --- Configuración de Logs ---
+  # Directorio para los archivos de log dentro del contenedor.
+  # El sistema creará automáticamente un subdirectorio con el nombre del fichero de configuración.
+  # Ejemplo: /var/log/backup_influxdb/
+  log_directory: /var/log/backup_influxdb/
 
   # Nivel de log: DEBUG, INFO, WARNING, ERROR, CRITICAL
   # DEBUG: muy detallado.
   # INFO: recomendado para operación normal.
   log_level: INFO
+
+  # Configuración de rotación de logs
+  # Permite rotar los archivos de log basados en tiempo para no ocupar todo el disco.
+  log_rotation:
+    # Habilitar o deshabilitar la rotación de logs.
+    enabled: true
+    # Cuándo rotar. 'D' para diario, 'H' para por hora, 'M' para por minuto.
+    # Ver la documentación de TimedRotatingFileHandler de Python para más opciones.
+    when: 'D'
+    # Con qué frecuencia rotar, basado en la unidad de 'when'. 1 = cada día/hora/minuto.
+    interval: 1
+    # Cuántos archivos de log antiguos mantener.
+    backup_count: 5

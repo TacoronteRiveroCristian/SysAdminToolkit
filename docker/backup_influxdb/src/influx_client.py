@@ -108,43 +108,70 @@ class InfluxClient:
             }
         return {}
 
-    def get_first_timestamp(self, database, measurement):
+    def get_first_timestamp(self, database, measurement, fields=None):
         """
-        Obtiene el timestamp del primer punto (el más antiguo) de una medición.
-        Devuelve un string en formato RFC3339 o None si no hay datos.
+        Obtiene el timestamp del primer punto (el más antiguo) de una medición,
+        considerando solo los campos especificados.
         """
         logger.debug(
-            f"Buscando primer timestamp para '{measurement}' en DB '{database}'"
+            f"Buscando primer timestamp para '{measurement}' en DB '{database}' para los campos {fields}"
         )
-        query_str = f'SELECT * FROM "{measurement}" ORDER BY time ASC LIMIT 1'
+
+        if not fields:
+            query_str = (
+                f'SELECT * FROM "{measurement}" ORDER BY time ASC LIMIT 1'
+            )
+        else:
+            select_clauses = [f'FIRST("{field}")' for field in fields]
+            query_str = (
+                f'SELECT {", ".join(select_clauses)} FROM "{measurement}"'
+            )
+
         result = self.query(query_str, database)
         if result:
             try:
-                return next(result.get_points())["time"]
-            except (StopIteration, KeyError):
+                point = next(result.get_points())
+                # Si el punto no contiene ninguna de las claves 'first', significa que no había datos.
+                if not any(k.startswith("first") for k in point):
+                    return None
+                return point["time"]
+            except (StopIteration, KeyError, TypeError):
                 logger.debug(
-                    f"No se encontraron datos en '{measurement}' en DB '{database}'."
+                    f"No se encontraron datos para los campos de interés en '{measurement}' en DB '{database}'."
                 )
                 return None
         return None
 
-    def get_last_timestamp(self, database, measurement):
+    def get_last_timestamp(self, database, measurement, fields=None):
         """
-        Obtiene el timestamp del último punto de una medición.
-        Devuelve un string en formato RFC3339 o None si no hay datos.
+        Obtiene el timestamp del último punto (el más reciente) de una medición,
+        considerando solo los campos especificados.
         """
         logger.debug(
-            f"Buscando último timestamp para '{measurement}' en DB '{database}'"
+            f"Buscando último timestamp para '{measurement}' en DB '{database}' para los campos {fields}"
         )
-        query_str = f'SELECT * FROM "{measurement}" ORDER BY time DESC LIMIT 1'
+
+        if not fields:
+            query_str = (
+                f'SELECT * FROM "{measurement}" ORDER BY time DESC LIMIT 1'
+            )
+        else:
+            select_clauses = [f'LAST("{field}")' for field in fields]
+            query_str = (
+                f'SELECT {", ".join(select_clauses)} FROM "{measurement}"'
+            )
+
         result = self.query(query_str, database)
         if result:
             try:
-                # El timestamp se devuelve en la clave 'time' del primer punto
-                return next(result.get_points())["time"]
-            except (StopIteration, KeyError):
+                point = next(result.get_points())
+                # Si el punto no contiene ninguna de las claves 'last', significa que no había datos.
+                if not any(k.startswith("last") for k in point):
+                    return None
+                return point["time"]
+            except (StopIteration, KeyError, TypeError):
                 logger.debug(
-                    f"No se encontraron datos en '{measurement}' en DB '{database}'."
+                    f"No se encontraron datos para los campos de interés en '{measurement}' en DB '{database}'."
                 )
                 return None
         return None

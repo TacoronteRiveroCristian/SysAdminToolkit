@@ -1,17 +1,26 @@
 import logging
 import sys
-from logging.handlers import RotatingFileHandler
+from logging import FileHandler
+from logging.handlers import TimedRotatingFileHandler
 
 
-def setup_logging(log_level_str, log_file):
+def setup_logging(
+    log_level_str, log_file, process_name=None, rotation_config=None
+):
     """
     Configura el logging para la aplicación.
     """
+    if rotation_config is None:
+        rotation_config = {}
+
     log_level = getattr(logging, log_level_str.upper(), logging.INFO)
 
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    if process_name:
+        log_format = f"%(asctime)s - [{process_name}] - %(name)s - %(levelname)s - %(message)s"
+    else:
+        log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+    formatter = logging.Formatter(log_format)
 
     # Configurar el logger raíz
     root_logger = logging.getLogger()
@@ -29,15 +38,39 @@ def setup_logging(log_level_str, log_file):
     # Handler para el archivo de log con rotación
     if log_file:
         try:
-            # Rotación de 10MB por archivo, manteniendo 5 archivos de backup
-            file_handler = RotatingFileHandler(
-                log_file, maxBytes=10 * 1024 * 1024, backupCount=5
-            )
+            rotation_enabled = rotation_config.get("enabled", False)
+
+            if rotation_enabled:
+                # Rotación basada en tiempo
+                when = rotation_config.get("when", "D")
+                interval = rotation_config.get("interval", 1)
+                backup_count = rotation_config.get("backup_count", 5)
+
+                file_handler = TimedRotatingFileHandler(
+                    log_file,
+                    when=when,
+                    interval=interval,
+                    backupCount=backup_count,
+                    encoding="utf-8",
+                )
+
+            else:
+                # Handler simple sin rotación si está deshabilitado
+                file_handler = FileHandler(log_file, encoding="utf-8")
+
             file_handler.setFormatter(formatter)
             root_logger.addHandler(file_handler)
-            logging.info(
-                f"Logging configurado para escribir en el archivo: {log_file}"
-            )
+
+            if rotation_enabled:
+                logging.info(
+                    f"Logging con rotación de tiempo configurado para '{log_file}'. "
+                    f"BackupCount={backup_count}"
+                )
+            else:
+                logging.info(
+                    f"Logging sin rotación configurado para '{log_file}'."
+                )
+
         except Exception as e:
             logging.error(
                 f"No se pudo configurar el logging en el archivo {log_file}: {e}"

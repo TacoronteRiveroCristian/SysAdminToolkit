@@ -7,20 +7,17 @@ WORKDIR /app
 RUN apt-get update && apt-get -y install cron && rm -rf /var/lib/apt/lists/*
 
 # Copiar requisitos e instalar dependencias
-COPY src/requirements.txt .
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copiar código fuente
 COPY src/ .
 
-# Hacer scripts ejecutables
-RUN chmod +x /app/backup_influxdb.py /app/backup_influxdb_cron.py
-
 # Crear directorio de logs
 RUN mkdir -p /var/log/backup_influxdb
 
-# El archivo de configuración YAML se monta como volumen
-# desde el host en docker-compose.yaml
+# Copiar carpeta de ficheros .YAML
+COPY config/ .
 
 # Comando por defecto (ejecuta el script principal)
 CMD ["sleep", "infinity"]

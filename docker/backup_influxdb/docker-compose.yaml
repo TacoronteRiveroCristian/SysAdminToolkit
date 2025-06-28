@@ -25,10 +25,28 @@ services:
     networks:
       - backup_network
 
+  sysadmintoolkit-grafana-dev: # Grafana server for development/testing
+    image: grafana/grafana:latest
+    container_name: sysadmintoolkit-grafana-dev
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./volumes/grafana/grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GF_SECURITY_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_HTTP_PORT=3000
+    profiles:
+      - development
+    networks:
+      - backup_network
+
   sysadmintoolkit-backup-service-dev: # Backup service for development
     container_name: sysadmintoolkit-backup-service-dev
     <<: *sysadmintoolkit-backup-service
     volumes:
+      - ../../.cursor/:/app/.cursor/
       - ./volumes/backup_logs:/var/log/backup_influxdb
       - ./:/app/
     profiles:

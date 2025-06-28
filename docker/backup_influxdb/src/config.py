@@ -74,11 +74,3 @@ class Config:
             else:
                 return default
         return value
-
-
-# Instancia global para ser importada por otros módulos
-try:
-    config = Config()
-except (FileNotFoundError, ValueError) as e:
-    logger.critical(f"Error fatal al inicializar la configuración: {e}")
-    config = None

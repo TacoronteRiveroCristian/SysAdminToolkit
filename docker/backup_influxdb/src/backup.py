@@ -59,6 +59,43 @@ class BackupManager:
                     raise e
         return None  # No debería alcanzarse, pero es para que el linter esté contento
 
+    def _get_fields_to_backup(self, source_db, measurement):
+        """
+        Calcula la lista final de campos a respaldar para una medición,
+        basado en la configuración (include, exclude, types).
+        """
+        specific_config = self.config.get(
+            f"measurements.specific.{measurement}", {}
+        )
+        all_fields = self.source_client.get_field_keys(source_db, measurement)
+
+        fields_config = (
+            specific_config.get("fields", {}) if specific_config else {}
+        )
+        types_to_include = fields_config.get(
+            "types", ["numeric", "string", "boolean"]
+        )
+        valid_influx_types = {"float", "integer", "string", "boolean"}
+        fields_by_type = []
+        for f, t in all_fields.items():
+            normalized_type = t.replace("integer", "numeric").replace(
+                "float", "numeric"
+            )
+            if t in valid_influx_types and normalized_type in types_to_include:
+                fields_by_type.append(f)
+
+        fields_include = fields_config.get("include", [])
+        fields_exclude = fields_config.get("exclude", [])
+
+        if fields_include:
+            final_fields = [f for f in fields_by_type if f in fields_include]
+        else:
+            final_fields = [
+                f for f in fields_by_type if f not in fields_exclude
+            ]
+
+        return final_fields
+
     def run_backup(self):
         """Punto de entrada principal para ejecutar el backup según el modo configurado."""
         mode = self.config.get("options.backup_mode")
@@ -148,12 +185,30 @@ class BackupManager:
         """Procesa una única medición, copiando los datos."""
         logger.info(f"Procesando medición: '{measurement}'")
 
+        fields_to_backup = self._get_fields_to_backup(source_db, measurement)
+        if not fields_to_backup:
+            logger.warning(
+                f"No hay campos que respaldar para '{measurement}' después de aplicar filtros de configuración. Saltando."
+            )
+            return
+
+        logger.debug(
+            f"Campos de interés para este backup de '{measurement}': {fields_to_backup}"
+        )
+
         # Para modo incremental, determinar el rango de tiempo
         if self.config.get("options.backup_mode") == "incremental":
-            last_timestamp_str = self.dest_client.get_last_timestamp(
-                dest_db, measurement
+            logger.info(
+                f"Modo incremental: Buscando el último timestamp en destino '{dest_db}' para los campos: {fields_to_backup}"
             )
+            last_timestamp_str = self.dest_client.get_last_timestamp(
+                dest_db, measurement, fields=fields_to_backup
+            )
+
             if last_timestamp_str:
+                logger.info(
+                    f"Último timestamp encontrado en destino: {last_timestamp_str}. Se continuará desde este punto."
+                )
                 # Comprobar si la medición está obsoleta
                 obsolete_threshold = self.config.get(
                     "incremental.obsolete_threshold"
@@ -163,27 +218,26 @@ class BackupManager:
                         last_timestamp_str, obsolete_threshold
                     ):
                         logger.info(
-                            f"La medición '{measurement}' está obsoleta. Saltando..."
+                            f"La medición '{measurement}' está obsoleta para los campos de interés. Saltando..."
                         )
                         return
                 start_time = last_timestamp_str
             else:
-                # El destino está vacío. Buscar el primer punto en el origen.
                 logger.info(
-                    f"No hay datos para '{measurement}' en destino '{dest_db}'. Buscando el registro más antiguo en origen '{source_db}'."
+                    f"No se encontró ningún timestamp en destino para los campos de interés. Se buscará el primer dato en el origen '{source_db}'."
                 )
                 first_timestamp_str = self.source_client.get_first_timestamp(
-                    source_db, measurement
+                    source_db, measurement, fields=fields_to_backup
                 )
 
                 if not first_timestamp_str:
                     logger.info(
-                        f"No se han encontrado datos para '{measurement}' en el origen. Saltando medición."
+                        f"No se han encontrado datos para los campos de '{measurement}' en el origen. Saltando medición."
                     )
-                    return  # No hay nada que copiar
+                    return
 
                 logger.info(
-                    f"El registro más antiguo en origen es de {first_timestamp_str}. Se iniciará el backup desde ese punto."
+                    f"El registro más antiguo en origen para los campos de interés es de {first_timestamp_str}. Se iniciará el backup desde ese punto."
                 )
                 # Restamos un microsegundo para asegurar que la consulta (que usa '>') incluya el primer punto.
                 first_ts_dt = datetime.fromisoformat(
@@ -195,6 +249,7 @@ class BackupManager:
 
         # Paginación por días
         pagination_days = self.config.get("options.days_of_pagination", 7)
+        logger.debug(f"Calculando rangos de paginación desde: {start_time}")
         date_ranges = self._calculate_date_ranges(
             start_time, end_time, pagination_days
         )
@@ -210,7 +265,12 @@ class BackupManager:
                     f"Procesando período {i+1}/{len(date_ranges)} para '{measurement}': {period_start} a {period_end}"
                 )
             self._transfer_data(
-                source_db, dest_db, measurement, period_start, period_end
+                source_db,
+                dest_db,
+                measurement,
+                period_start,
+                period_end,
+                fields_to_backup,
             )
 
     def _is_obsolete(self, last_timestamp_str, threshold_str):
@@ -269,11 +329,17 @@ class BackupManager:
         return ranges
 
     def _transfer_data(
-        self, source_db, dest_db, measurement, period_start, period_end
+        self,
+        source_db,
+        dest_db,
+        measurement,
+        period_start,
+        period_end,
+        fields_to_backup,
     ):
         """Construye la consulta, la ejecuta y escribe los datos en el destino."""
         query = self._build_query(
-            source_db, measurement, period_start, period_end
+            source_db, measurement, period_start, period_end, fields_to_backup
         )
         if not query:
             logger.warning(
@@ -301,23 +367,27 @@ class BackupManager:
                 series_points = point_group[1]
 
                 for p in series_points:
+                    # Filtramos explícitamente los campos para escribir SOLO los que corresponden a este backup.
+                    # Esta es la corrección clave para evitar la contaminación de datos.
+                    filtered_fields = {
+                        k: v
+                        for k, v in p.items()
+                        if k in fields_to_backup and v is not None
+                    }
+
                     point = {
                         "measurement": measurement,
                         "tags": series_tags,
                         "time": p["time"],
-                        "fields": {
-                            k: v
-                            for k, v in p.items()
-                            if k != "time" and v is not None
-                        },
+                        "fields": filtered_fields,
                     }
-                    # Solo añadir el punto si tiene al menos un campo no nulo
+                    # Solo añadir el punto si tiene al menos un campo válido tras el filtrado
                     if point["fields"]:
                         points_to_write.append(point)
 
             if points_to_write:
                 logger.info(
-                    f"[{source_db}] Se encontraron {len(points_to_write)} puntos válidos (no nulos) para '{measurement}' en este período."
+                    f"[{source_db}] Se encontraron {len(points_to_write)} puntos válidos (no nulos) para los campos de interés en este período."
                 )
                 logger.info(
                     f"[{source_db} -> {dest_db}] Escribiendo {len(points_to_write)} puntos de '{measurement}'."
@@ -330,7 +400,7 @@ class BackupManager:
                 )
             else:
                 logger.info(
-                    f"No se encontraron nuevos puntos válidos (no nulos) para '{measurement}' en este período."
+                    f"No se encontraron nuevos puntos válidos (no nulos) para los campos de interés en este período."
                 )
 
         except Exception as e:
@@ -338,45 +408,17 @@ class BackupManager:
                 f"Fallo en la transferencia de datos para '{measurement}': {e}"
             )
 
-    def _build_query(self, source_db, measurement, start_time, end_time):
+    def _build_query(
+        self, source_db, measurement, start_time, end_time, fields_to_backup
+    ):
         """Construye la consulta SELECT * con filtros de tiempo y group by."""
-        specific_config = self.config.get(
-            f"measurements.specific.{measurement}", {}
-        )
-        all_fields = self.source_client.get_field_keys(source_db, measurement)
-
-        # Filtrar campos por tipo
-        types_to_include = specific_config.get(
-            "types", ["numeric", "string", "boolean"]
-        )
-        valid_influx_types = {"float", "integer", "string", "boolean"}
-        fields_by_type = []
-        for f, t in all_fields.items():
-            if (
-                t in valid_influx_types
-                and t.replace("integer", "numeric").replace("float", "numeric")
-                in types_to_include
-            ):
-                fields_by_type.append(f)
-
-        # Filtrar campos por include/exclude
-        fields_include = specific_config.get("fields.include", [])
-        fields_exclude = specific_config.get("fields.exclude", [])
-
-        if fields_include:
-            final_fields = [f for f in fields_by_type if f in fields_include]
-        else:
-            final_fields = [
-                f for f in fields_by_type if f not in fields_exclude
-            ]
-
-        if not final_fields:
+        if not fields_to_backup:
             logger.warning(
                 f"No hay campos que respaldar para '{measurement}' después de aplicar filtros."
             )
             return None
 
-        select_clause = ", ".join([f'"{f}"' for f in final_fields])
+        select_clause = ", ".join([f'"{f}"' for f in fields_to_backup])
         query = f'SELECT {select_clause} FROM "{measurement}"'
 
         # Cláusula WHERE para el tiempo
@@ -393,6 +435,7 @@ class BackupManager:
         # Cláusula GROUP BY
         group_by = self.config.get("source.group_by")
         if group_by:
+            # Al agrupar, también debemos incluir todas las etiquetas (*)
             query += f" GROUP BY *, time({group_by})"
         else:
             # Agrupar por todas las etiquetas si no hay group by de tiempo
