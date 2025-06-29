@@ -54,89 +54,65 @@ A continuación se detallan las tareas principales orquestadas por el módulo.
 
 ### Tarea 2: Proceso de Backup (`BackupManager`)
 
-- **Descripción**: Esta es la tarea central, ejecutada por cada `worker`. El `BackupManager` gestiona todo el ciclo de vida de una copia de seguridad. Primero, determina el modo (`range` o `incremental`). Luego, calcula el rango de tiempo a procesar; para el modo incremental, consulta el último timestamp en la base de datos de destino para sincronizar solo los datos nuevos. Para evitar consultas masivas, el rango de tiempo total se divide en fragmentos más pequeños (`chunks`). El proceso itera sobre estos fragmentos, consultando los datos del origen y escribiéndolos en el destino. Implementa una política de reintentos para manejar fallos transitorios en la red o en la base de datos.
+- **Descripción**: Esta es la tarea central, ejecutada por cada `worker`. El `BackupManager` gestiona todo el ciclo de vida de una copia de seguridad. Primero, determina las bases de datos a respaldar: si la configuración incluye una lista explícita, la utiliza; si la lista está vacía, obtiene automáticamente todas las bases de datos del servidor de origen. En ambos casos, puede aplicar un prefijo y/o sufijo a los nombres de las bases de datos de destino para diferenciarlas. Una vez definida la lista de tareas, itera sobre cada par de bases de datos (origen y destino), se asegura de que la base de datos de destino exista y luego procesa cada una de sus mediciones. La lógica detallada de cómo se procesa cada medición (cálculo de rango, paginación, reintentos) se detalla en el diagrama específico de `_process_measurement`.
 - **Flujo de Datos**:
   - **Origen**:
     - **Sistema**: InfluxDB (Origen)
-    - **Base de Datos**: Definida en `source.databases[].name` (config.yaml)
+    - **Base de Datos**: Definida en `source.databases[].name` o todas las BBDD si la lista está vacía.
     - **Medida**: Todas las mediciones (o filtradas por `measurements.include`/`exclude` en config.yaml)
   - **Destino**:
     - **Sistema**: InfluxDB (Destino)
-    - **Base de Datos**: Definida en `source.databases[].destination` (config.yaml)
+    - **Base de Datos**: Definida en `source.databases[].destination` (con prefijo/sufijo) o nombre original (con prefijo/sufijo).
     - **Medida**: Las mismas que en el origen.
-- **Diagrama de Secuencia (Detallado)**:
+- **Diagrama de Secuencia (General)**:
   ```mermaid
-    sequenceDiagram
-        participant Worker as "Worker (run_worker)"
-        participant BM as "BackupManager"
-        participant InfluxClientSrc as "Cliente InfluxDB (Origen)"
-        participant InfluxClientDst as "Cliente InfluxDB (Destino)"
+  sequenceDiagram
+      participant Worker as "Worker (run_worker)"
+      participant BM as "BackupManager"
+      participant InfluxClientSrc as "Cliente InfluxDB (Origen)"
+      participant InfluxClientDst as "Cliente InfluxDB (Destino)"
 
-        Worker->>BM: Iniciar Backup
-        BM->>BM: Leer modo de backup (range/incremental)
+      Worker->>BM: Iniciar Backup
+      BM->>BM: Leer config de BBDD (lista, prefijo, sufijo)
 
-        alt Modo Incremental
-            BM->>InfluxClientDst: Obtener último timestamp de la medición en destino
-            activate InfluxClientDst
-            InfluxClientDst-->>BM: Timestamp o None
-            deactivate InfluxClientDst
-            alt Destino vacío o error
-                 BM->>BM: Usar fallback ('options.incremental.fallback_days') para calcular fecha de inicio
-            end
-        else Modo Range
-            BM->>BM: Usar 'start_date' y 'end_date' de la configuración
-        end
+      alt Lista de BBDD en config está vacía
+          BM->>InfluxClientSrc: get_databases()
+          activate InfluxClientSrc
+          InfluxClientSrc-->>BM: Lista de todas las BBDD
+          deactivate InfluxClientSrc
+      end
 
-        BM->>InfluxClientSrc: Obtener lista de mediciones a respaldar
-        activate InfluxClientSrc
-        InfluxClientSrc-->>BM: Lista de mediciones
-        deactivate InfluxClientSrc
-        BM->>BM: Filtrar mediciones (include/exclude)
+      BM->>BM: Construir lista final de BBDD a procesar (origen -> destino)
 
-        BM->>BM: Calcular fragmentos de tiempo (chunks) para el rango total
+      loop Por cada BBDD en la lista final
+          BM->>InfluxClientDst: create_database(destino)
+          activate InfluxClientDst
+          InfluxClientDst-->>BM: OK
+          deactivate InfluxClientDst
 
-        loop Por cada fragmento de tiempo (chunk)
-            BM->>InfluxClientSrc: Obtener campos y tipos para la medición
-            activate InfluxClientSrc
-            InfluxClientSrc-->>BM: Lista de campos (fields)
-            deactivate InfluxClientSrc
-            BM->>BM: Filtrar campos (include/exclude/types)
+          BM->>InfluxClientSrc: get_measurements(origen)
+          activate InfluxClientSrc
+          InfluxClientSrc-->>BM: Lista de mediciones
+          deactivate InfluxClientSrc
 
-            Note over BM: Inicia bucle de reintentos
-            loop reintentos
-                BM->>InfluxClientSrc: Construir y ejecutar QUERY (SELECT ... WHERE time >= ... AND time < ...)
-                activate InfluxClientSrc
-                InfluxClientSrc-->>BM: Datos como DataFrame de Pandas
-                deactivate InfluxClientSrc
-
-                alt Consulta exitosa y datos recibidos
-                    break Escritura y salida del bucle de reintentos
-                        BM->>InfluxClientDst: Escribir DataFrame en la DB de destino
-                        activate InfluxClientDst
-                        InfluxClientDst-->>BM: Confirmación de escritura
-                        deactivate InfluxClientDst
-                    end
-                else Consulta falla o no hay datos
-                    BM->>BM: Esperar 'retry_delay' y continuar reintento
-                end
-            end
-            alt Fallan todos los reintentos
-                BM->>Worker: Lanzar Excepción. El error queda registrado.
-            end
-        end
-        Worker->>Worker: Tarea de backup finalizada (o fallida)
+          loop Por cada medición
+              BM->>BM: Llamar a _process_measurement(origen, destino, medicion)
+              Note right of BM: (Ver diagrama de _process_measurement para detalles)
+          end
+      end
+      Worker->>Worker: Tarea de backup finalizada (o fallida)
   ```
 
   - **Explicación del Diagrama**:
-    1.  El **Worker** da la orden de iniciar el backup al **BackupManager** (`BM`).
-    2.  El `BM` primero lee su configuración para saber si el modo es `incremental` o `range`.
-    3.  **Si es `incremental`**, consulta al **Cliente InfluxDB de Destino** para obtener el último timestamp registrado. Si no hay datos, utiliza una fecha de fallback para empezar.
-    4.  A continuación, obtiene del **Cliente InfluxDB de Origen** la lista de mediciones y las filtra según la configuración.
-    5.  Calcula los fragmentos de tiempo (`chunks`) en los que dividirá la consulta total para no sobrecargar las bases de datos.
-    6.  Inicia un bucle por cada `chunk` y, dentro de él, un **bucle de reintentos** para dar robustez al proceso.
-    7.  En cada reintento, consulta los datos del origen. Si la consulta tiene éxito y devuelve datos, los escribe en el destino y sale del bucle de reintentos usando `break`. Si falla o no devuelve datos, espera un tiempo (`retry_delay`) y vuelve a intentarlo.
-    8.  Si todos los reintentos fallan para un `chunk`, se registra un error crítico y se lanza una excepción.
-    9.  Una vez procesados todos los `chunks`, la tarea del worker finaliza.
+    1.  El **Worker** inicia el proceso de backup en el **BackupManager** (`BM`).
+    2.  El `BM` lee la configuración para obtener la lista de bases de datos, así como el prefijo y sufijo.
+    3.  Si la lista de bases de datos de la configuración está vacía, realiza una llamada al **Cliente InfluxDB de Origen** para obtener una lista de todas las bases de datos existentes.
+    4.  Con esta información, construye una lista final de tareas, donde cada tarea es un par de base de datos origen y destino (con prefijo/sufijo aplicados).
+    5.  Entra en un bucle por cada tarea. Para cada una:
+        a. Asegura que la base de datos de destino exista, creándola si es necesario a través del **Cliente InfluxDB de Destino**.
+        b. Obtiene todas las mediciones de la base de datos origen.
+        c. Itera sobre cada medición, delegando su procesamiento a la lógica interna (descrita en el diagrama de `_process_measurement`).
+    6.  Una vez completadas todas las tareas, el worker finaliza.
 
 ---
 ## Componentes Auxiliares
@@ -147,7 +123,7 @@ Scripts que proporcionan funcionalidades clave al sistema.
   - **Descripción**: Una clase `Config` que carga un fichero de configuración YAML, valida que las claves esenciales (`source`, `destination`, `options`, etc.) estén presentes y proporciona un método `get()` para acceder a valores anidados usando notación de puntos (ej. `options.retries`).
 
 - **`influx_client.py`**:
-  - **Descripción**: Una clase `InfluxClient` que actúa como un cliente para InfluxDB 1.x. Envuelve la librería `influxdb-python`, proporcionando métodos para realizar consultas (`SHOW MEASUREMENTS`, `SHOW FIELD KEYS`, `get_last_timestamp`), crear bases de datos y gestionar la conexión.
+  - **Descripción**: Una clase `InfluxClient` que actúa como un cliente para InfluxDB 1.x. Envuelve la librería `influxdb-python`, proporcionando métodos para realizar consultas (`SHOW MEASUREMENTS`, `SHOW FIELD KEYS`, `get_last_timestamp`), listar todas las bases de datos (`get_databases`), crear bases de datos y gestionar la conexión.
   - **Nota Importante**: Se asume que esta clase ha sido extendida localmente para incluir los métodos `query_to_dataframe` y `write_dataframe`, que son llamados por el `BackupManager` para leer datos en un DataFrame de Pandas y escribirlo, respectivamente. Esta funcionalidad es crítica para la transferencia de datos.
 
 - **`scheduler.py`**:
@@ -260,16 +236,24 @@ sequenceDiagram
     InfluxClient->>InfluxClient: test connection
     InfluxClient->>IDBL: ping
     IDBL-->>InfluxClient: version
-    InfluxClient-->>AcUsertor: client instance
+    InfluxClient-->>User: client instance
     deactivate InfluxClient
 
-    Note over User, IDBL: Ciclo de Lectura
+    Note over User, IDBL: Ciclo de Lectura (Consulta)
     User->>InfluxClient: query data
     activate InfluxClient
     InfluxClient->>IDBL: switch database
     InfluxClient->>IDBL: query
     IDBL-->>InfluxClient: ResultSet
     InfluxClient-->>User: ResultSet
+    deactivate InfluxClient
+
+    Note over User, IDBL: Ciclo de Lectura (Listar BBDD)
+    User->>InfluxClient: get_databases
+    activate InfluxClient
+    InfluxClient->>IDBL: get_list_database
+    IDBL-->>InfluxClient: Lista de BBDD
+    InfluxClient-->>User: Lista de nombres de BBDD
     deactivate InfluxClient
 
     Note over User, IDBL: Ciclo de Escritura
@@ -283,10 +267,11 @@ sequenceDiagram
 ```
 
   - **Explicación del Diagrama**:
-    1.  Un **Actor** (como el `BackupManager`) crea una instancia de nuestro `InfluxClient` (`IClient`), proporcionando las credenciales.
+    1.  Un **Usuario** (como el `BackupManager`) crea una instancia de nuestro `InfluxClient`.
     2.  Nuestro `IClient` internamente crea una instancia del cliente real de la librería (`LibClient`) y realiza una prueba de conexión (`ping`).
-    3.  **Ciclo de Lectura**: Cuando el `Actor` solicita datos (`query_data`), nuestro `IClient` primero se asegura de que la base de datos correcta esté seleccionada en el `LibClient` (`switch_database`) y luego ejecuta la consulta, devolviendo el resultado.
-    4.  **Ciclo de Escritura**: De forma análoga, cuando el `Actor` quiere escribir datos (`write_points`), nuestro `IClient` selecciona la base de datos de destino y pasa los puntos al `LibClient` para que realice la escritura.
+    3.  **Ciclo de Lectura (Consulta)**: Cuando el `Actor` solicita datos (`query_data`), nuestro `IClient` primero se asegura de que la base de datos correcta esté seleccionada en el `LibClient` (`switch_database`) y luego ejecuta la consulta, devolviendo el resultado.
+    4.  **Ciclo de Lectura (Listar BBDD)**: Además de la consulta, el `IClient` puede listar todas las bases de datos disponibles en el servidor de InfluxDB.
+    5.  **Ciclo de Escritura**: De forma análoga, cuando el `Actor` quiere escribir datos (`write_points`), nuestro `IClient` selecciona la base de datos de destino y pasa los puntos al `LibClient` para que realice la escritura.
 
 ### `logger_config.py` (`setup_logging`)
 

@@ -164,8 +164,47 @@ class BackupManager:
 
     def _process_databases(self, start_time=None, end_time=None):
         """Itera sobre las BBDD configuradas y procesa sus mediciones."""
-        databases = self.config.get("source.databases", [])
-        for db_map in databases:
+        databases_config = self.config.get("source.databases", [])
+        prefix = self.config.get("source.prefix", "")
+        suffix = self.config.get("source.suffix", "")
+
+        databases_to_process = []
+
+        if not databases_config:
+            # Si no se especifican BBDD, se obtienen todas las del origen
+            logger.info(
+                "No se especificaron bases de datos. Se buscarán todas las bases de datos en el origen."
+            )
+            try:
+                all_dbs = self.source_client.get_databases()
+                # Excluir bases de datos internas de InfluxDB
+                internal_dbs = {"_internal"}
+                source_dbs = [db for db in all_dbs if db not in internal_dbs]
+                logger.info(f"Bases de datos encontradas: {source_dbs}")
+
+                for db_name in source_dbs:
+                    dest_db_name = f"{prefix}{db_name}{suffix}"
+                    databases_to_process.append(
+                        {"name": db_name, "destination": dest_db_name}
+                    )
+            except Exception as e:
+                logger.error(
+                    f"No se pudo obtener la lista de bases de datos del origen: {e}"
+                )
+                return
+        else:
+            # Se usan las BBDD especificadas en la configuración
+            for db_map in databases_config:
+                dest_db_name = f"{prefix}{db_map['destination']}{suffix}"
+                databases_to_process.append(
+                    {"name": db_map["name"], "destination": dest_db_name}
+                )
+
+        if not databases_to_process:
+            logger.warning("No hay bases de datos para procesar. Finalizando.")
+            return
+
+        for db_map in databases_to_process:
             source_db = db_map["name"]
             dest_db = db_map["destination"]
             logger.info(f"Procesando backup de '{source_db}' -> '{dest_db}'")

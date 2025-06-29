@@ -26,21 +26,36 @@ source:
   # Recomendado 'true' en producción, 'false' para certificados autofirmados.
   verify_ssl: true
 
-  # Lista de bases de datos a respaldar
+  # Lista de bases de datos a respaldar.
+  # Si esta lista se deja vacía (databases: []), se respaldarán TODAS las bases de datos del servidor origen.
   # Cada entrada debe tener:
-  #   - name: Nombre de la base de datos en el origen
-  #   - destination: Nombre que tendrá en el destino (puede ser el mismo)
-  # Ejemplo: Para respaldar solo la DB 'telegraf' con el mismo nombre:
+  #   - name: Nombre de la base de datos en el origen.
+  #   - destination: Nombre que tendrá en el destino (puede ser el mismo).
+  #
+  # Ejemplo (respaldar solo BBDD específicas):
   # databases:
   #   - name: telegraf
   #     destination: telegraf
   #   - name: database_2
-  #     destination: database_2
+  #     destination: database_2_backup
+  #
+  # Ejemplo (respaldar TODAS las BBDD):
+  # databases: []
   databases:
     - name: metrics
       destination: metrics_backup
     - name: telegraf
       destination: telegraf_backup
+
+  # Prefijo y sufijo opcionales para los nombres de las bases de datos en el destino.
+  # Útil para diferenciar las bases de datos respaldadas.
+  # - Si 'databases' no está vacía, se aplica sobre el campo 'destination'.
+  #   Ej: prefix: 'bkp_', destination: 'metrics'  => bkp_metrics
+  # - Si 'databases' está vacía, se aplica sobre el nombre original de la BBDD.
+  #   Ej: suffix: '_bkp', BBDD origen: 'telegraf' => telegraf_bkp
+  # Dejar en blanco para no usar.
+  prefix: ""
+  suffix: ""
 
   # Autenticación (si es necesaria)
   # Deja en blanco si no se requiere autenticación

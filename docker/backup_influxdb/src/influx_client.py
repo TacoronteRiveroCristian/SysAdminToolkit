@@ -61,6 +61,18 @@ class InfluxClient:
                 f"No se pudo conectar a la instancia de InfluxDB en {self.url}: {e}"
             )
 
+    def get_databases(self):
+        """Obtiene la lista de todas las bases de datos en el servidor."""
+        logger.debug(f"Obteniendo la lista de bases de datos desde {self.url}")
+        try:
+            databases = self.client.get_list_database()
+            return [db["name"] for db in databases]
+        except (ConnectionError, InfluxDBClientError) as e:
+            logger.error(
+                f"Error al obtener la lista de bases de datos desde {self.url}: {e}"
+            )
+            raise
+
     def query(self, query_string, database):
         """Ejecuta una consulta en una base de datos específica."""
         logger.debug(f"Ejecutando consulta en DB '{database}': {query_string}")
