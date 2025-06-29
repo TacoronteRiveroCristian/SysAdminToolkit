@@ -10,9 +10,9 @@ x-sysadmintoolkit-backup-service: &sysadmintoolkit-backup-service
 
 ### Services ###
 services:
-  sysadmintoolkit-influxdb: # InfluxDB server for development/testing
+  sysadmintoolkit-influxdb-dev: # InfluxDB server for development/testing
     image: influxdb:1.8
-    container_name: sysadmintoolkit-influxdb
+    container_name: sysadmintoolkit-influxdb-dev
     ports:
       - "8086:8086"
     environment:
@@ -25,13 +25,29 @@ services:
     networks:
       - backup_network
 
+  sysadmintoolkit-loki-dev:
+    image: grafana/loki
+    container_name: sysadmintoolkit-loki-dev
+    user: "root"
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./volumes/loki/config.yaml:/etc/loki/local-config.yaml
+      - ./volumes/loki/data:/loki
+    environment:
+      - LOKI_PORT=3100
+    restart: unless-stopped
+    command: -config.file=/etc/loki/local-config.yaml -config.expand-env=true
+    networks:
+      - backup_network
+
   sysadmintoolkit-grafana-dev: # Grafana server for development/testing
     image: grafana/grafana:latest
     container_name: sysadmintoolkit-grafana-dev
     ports:
       - "3000:3000"
     volumes:
-      - ./volumes/grafana/grafana_data:/var/lib/grafana
+      - ./volumes/grafana/data:/var/lib/grafana
     environment:
       - GF_SECURITY_ADMIN_USER=${GF_SECURITY_ADMIN_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD:-admin}

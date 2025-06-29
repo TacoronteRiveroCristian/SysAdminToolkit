@@ -2,6 +2,7 @@ import logging
 
 from influxdb import InfluxDBClient
 from influxdb.exceptions import InfluxDBClientError
+from requests.exceptions import ConnectionError
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +55,11 @@ class InfluxClient:
             logger.info(
                 f"Conexión exitosa a {self.url}. Versión de InfluxDB: {version}"
             )
-        except InfluxDBClientError as e:
-            logger.error(f"No se pudo conectar a InfluxDB en {self.url}: {e}")
+        except (ConnectionError, InfluxDBClientError) as e:
+            # Re-lanzar la excepción para que sea manejada por el llamador
             raise ConnectionError(
-                f"No se pudo conectar a InfluxDB en {self.url}"
-            ) from e
+                f"No se pudo conectar a la instancia de InfluxDB en {self.url}: {e}"
+            )
 
     def query(self, query_string, database):
         """Ejecuta una consulta en una base de datos específica."""
@@ -83,8 +84,11 @@ class InfluxClient:
         try:
             self.client.switch_database(database)
             self.client.write_points(points)
-        except InfluxDBClientError as e:
-            logger.error(f"Error al escribir puntos en '{database}': {e}")
+            return True
+        except (ConnectionError, InfluxDBClientError) as e:
+            logger.error(
+                f"Error de conexión al escribir datos en '{database}': {e}"
+            )
             raise
 
     def get_measurements(self, database):
@@ -182,6 +186,67 @@ class InfluxClient:
         try:
             self.client.create_database(db_name)
             logger.info(f"Base de datos '{db_name}' asegurada.")
-        except InfluxDBClientError as e:
-            logger.error(f"Error al crear la base de datos '{db_name}': {e}")
+        except (ConnectionError, InfluxDBClientError) as e:
+            logger.error(
+                f"Error de conexión al intentar crear/verificar la base de datos '{db_name}': {e}"
+            )
             raise
+
+    def build_query(
+        self,
+        db_name,
+        measurement,
+        start_time,
+        end_time,
+        fields,
+        group_by_interval,
+    ):
+        """Construye una consulta de InfluxQL para obtener datos."""
+        query_fields = ", ".join([f'"{f}"' for f in fields])
+        query = f'SELECT {query_fields} FROM "{db_name}"."autogen"."{measurement}" WHERE time >= \'{start_time}\' AND time <= \'{end_time}\''
+
+        if group_by_interval:
+            query += f" GROUP BY time({group_by_interval}),*"
+        else:
+            query += " GROUP BY *"
+
+        return query
+
+    def extract_points_from_result(self, result):
+        """Extrae y formatea los puntos de un ResultSet de InfluxDB."""
+        points_to_write = []
+        if not result:
+            return points_to_write
+
+        for point_group in result.items():
+            series_tags = point_group[0][1]
+            series_points = point_group[1]
+
+            for p in series_points:
+                # El timestamp ya viene en 'time', los demás campos son los valores
+                fields = {
+                    k: v for k, v in p.items() if k != "time" and v is not None
+                }
+
+                point = {
+                    "measurement": point_group[0][0],
+                    "tags": series_tags,
+                    "time": p["time"],
+                    "fields": fields,
+                }
+                if point["fields"]:
+                    points_to_write.append(point)
+
+        return points_to_write
+
+    def query_data(self, db_name, query):
+        """Ejecuta una consulta de datos y devuelve los resultados."""
+        try:
+            self.client.switch_database(db_name)
+            result = self.client.query(query)
+            return result
+        except InfluxDBClientError as e:
+            logger.error(
+                f"Error al ejecutar consulta en '{db_name}': {query} - Error: {e}"
+            )
+            return None

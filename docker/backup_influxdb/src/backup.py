@@ -1,4 +1,5 @@
 import logging
+import re
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -25,39 +26,69 @@ class BackupManager:
         self.retries = self.config.get("options.retries", 3)
         self.retry_delay = self.config.get("options.retry_delay", 5)
 
+    def _parse_timestamp(self, timestamp_str: str) -> datetime:
+        """Parsea un timestamp de InfluxDB (con o sin decimales) a un objeto datetime."""
+        # InfluxDB a veces devuelve timestamps con precisión de nanosegundos.
+        # datetime.fromisoformat no maneja más de 6 dígitos para microsegundos.
+        if "." in timestamp_str:
+            parts = timestamp_str.split(".")
+            main_part = parts[0]
+            frac_part = parts[1].replace("Z", "")
+            # Truncar a microsegundos (6 dígitos)
+            frac_part = frac_part[:6]
+            timestamp_str = f"{main_part}.{frac_part}Z"
+
+        # Asegurarse de que termine en 'Z' para que sea reconocido como UTC
+        if not timestamp_str.endswith("Z"):
+            timestamp_str += "Z"
+
+        return datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+
+    def _parse_duration(self, duration_str: str) -> timedelta:
+        """Parsea una cadena de duración (ej: '30d', '6M', '1y') a un timedelta."""
+        match = re.match(r"(\d+)([smhdwyM])", duration_str)
+        if not match:
+            raise ValueError(f"Formato de duración inválido: '{duration_str}'")
+
+        value, unit = int(match.group(1)), match.group(2)
+
+        if unit == "s":
+            return timedelta(seconds=value)
+        if unit == "m":
+            return timedelta(minutes=value)
+        if unit == "h":
+            return timedelta(hours=value)
+        if unit == "d":
+            return timedelta(days=value)
+        if unit == "w":
+            return timedelta(weeks=value)
+        # Estimaciones para meses y años
+        if unit == "M":
+            return timedelta(days=value * 30)
+        if unit == "y":
+            return timedelta(days=value * 365)
+
+        raise ValueError(f"Unidad de duración desconocida: '{unit}'")
+
     def _execute_with_retry(self, func, *args, **kwargs):
         """Ejecuta una función con una política de reintentos."""
         for attempt in range(self.retries + 1):
             try:
                 return func(*args, **kwargs)
             except Exception as e:
-                # Reintentar solo para errores de conexión/red, no para errores de lógica de InfluxDB
-                if isinstance(
-                    e,
-                    (
-                        ConnectionError,
-                        # InfluxDBClientError puede ser muy genérico, pero lo incluimos
-                        # importando la excepción específica si fuera necesario
-                        self.source_client.client.exceptions.InfluxDBClientError,
-                    ),
-                ):
-                    if attempt < self.retries:
-                        logger.warning(
-                            f"La operación falló por un error de red: {e}. Reintentando en {self.retry_delay}s... (Intento {attempt + 1}/{self.retries})"
-                        )
-                        time.sleep(self.retry_delay)
-                    else:
-                        logger.error(
-                            f"La operación falló después de {self.retries} reintentos."
-                        )
-                        raise e  # Lanza la excepción final si todos los reintentos fallan
-                else:
-                    # Si no es un error de red, no reintentar (ej. consulta mal formada)
-                    logger.error(
-                        f"La operación falló por un error no recuperable: {e}"
+                logger.warning(
+                    f"Fallo la ejecución de '{func.__name__}' (intento {attempt + 1}/{self.retries + 1}): {e}"
+                )
+                if attempt < self.retries:
+                    logger.info(
+                        f"Reintentando en {self.retry_delay} segundos..."
                     )
-                    raise e
-        return None  # No debería alcanzarse, pero es para que el linter esté contento
+                    time.sleep(self.retry_delay)
+                else:
+                    logger.error(
+                        f"Fallaron todos los reintentos para '{func.__name__}'."
+                    )
+                    raise  # Re-lanzar la excepción final
 
     def _get_fields_to_backup(self, source_db, measurement):
         """
@@ -179,21 +210,80 @@ class BackupManager:
         )
         return all_measurements
 
+    def _filter_obsolete_fields(self, dest_db, measurement, fields):
+        """
+        Filtra una lista de campos, descartando aquellos que son obsoletos.
+        """
+        threshold_str = self.config.get("options.field_obsolete_threshold")
+        if not threshold_str:
+            return fields  # No hay umbral, no se filtra nada
+
+        logger.debug(
+            f"Verificando obsolescencia de campos para '{measurement}' con umbral '{threshold_str}'..."
+        )
+
+        active_fields = []
+        try:
+            obsolete_threshold_td = self._parse_duration(threshold_str)
+        except ValueError as e:
+            logger.error(
+                f"Valor de 'field_obsolete_threshold' no válido: {e}. No se aplicará el filtro."
+            )
+            return fields
+
+        for field in fields:
+            # Consultar el último timestamp para este campo específico
+            last_ts_str = self._execute_with_retry(
+                self.dest_client.get_last_timestamp,
+                dest_db,
+                measurement,
+                fields=[field],
+            )
+
+            if last_ts_str:
+                last_ts = self._parse_timestamp(last_ts_str)
+                # Si el último punto es más reciente que el umbral de obsolescencia, el campo está activo
+                if (
+                    datetime.now(timezone.utc) - last_ts
+                ) <= obsolete_threshold_td:
+                    active_fields.append(field)
+                else:
+                    logger.warning(
+                        f"Campo '{field}' en '{measurement}' ignorado por obsoleto "
+                        f"(último dato en destino es de {last_ts_str}, umbral: {threshold_str})."
+                    )
+            else:
+                # Si no hay timestamp, el campo es nuevo en el destino, por lo tanto, está activo.
+                active_fields.append(field)
+
+        return active_fields
+
     def _process_measurement(
         self, source_db, dest_db, measurement, start_time, end_time
     ):
         """Procesa una única medición, copiando los datos."""
         logger.info(f"Procesando medición: '{measurement}'")
 
-        fields_to_backup = self._get_fields_to_backup(source_db, measurement)
-        if not fields_to_backup:
+        candidate_fields = self._get_fields_to_backup(source_db, measurement)
+        if not candidate_fields:
             logger.warning(
                 f"No hay campos que respaldar para '{measurement}' después de aplicar filtros de configuración. Saltando."
             )
             return
 
+        # Filtrar campos obsoletos antes de continuar
+        fields_to_backup = self._filter_obsolete_fields(
+            dest_db, measurement, candidate_fields
+        )
+
+        if not fields_to_backup:
+            logger.info(
+                f"No hay campos activos que respaldar para '{measurement}' después de filtrar por obsolescencia. Saltando."
+            )
+            return
+
         logger.debug(
-            f"Campos de interés para este backup de '{measurement}': {fields_to_backup}"
+            f"Campos activos para este backup de '{measurement}': {fields_to_backup}"
         )
 
         # Para modo incremental, determinar el rango de tiempo
@@ -210,17 +300,25 @@ class BackupManager:
                     f"Último timestamp encontrado en destino: {last_timestamp_str}. Se continuará desde este punto."
                 )
                 # Comprobar si la medición está obsoleta
-                obsolete_threshold = self.config.get(
-                    "incremental.obsolete_threshold"
+                obsolete_threshold_str = self.config.get(
+                    "options.incremental.obsolete_threshold"
                 )
-                if obsolete_threshold:
-                    if self._is_obsolete(
-                        last_timestamp_str, obsolete_threshold
-                    ):
-                        logger.info(
-                            f"La medición '{measurement}' está obsoleta para los campos de interés. Saltando..."
+                if obsolete_threshold_str:
+                    try:
+                        obsolete_threshold = self._parse_duration(
+                            obsolete_threshold_str
                         )
-                        return
+                        if self._is_obsolete(
+                            last_timestamp_str, obsolete_threshold
+                        ):
+                            logger.info(
+                                f"La medición '{measurement}' está obsoleta para los campos de interés. Saltando..."
+                            )
+                            return
+                    except ValueError as e:
+                        logger.error(
+                            f"Valor de 'incremental.obsolete_threshold' no válido: {e}. No se aplicará el filtro."
+                        )
                 start_time = last_timestamp_str
             else:
                 logger.info(
@@ -337,76 +435,56 @@ class BackupManager:
         period_end,
         fields_to_backup,
     ):
-        """Construye la consulta, la ejecuta y escribe los datos en el destino."""
-        query = self._build_query(
-            source_db, measurement, period_start, period_end, fields_to_backup
-        )
-        if not query:
-            logger.warning(
-                f"No se generó ninguna consulta para la medición '{measurement}'. Saltando."
-            )
-            return
-
+        """Consulta datos de origen y los escribe en el destino para un período."""
         try:
+            # Construir y ejecutar la consulta en el origen
+            query = self.source_client.build_query(
+                source_db,
+                measurement,
+                period_start,
+                period_end,
+                fields_to_backup,
+                self.config.get("source.group_by", ""),
+            )
             logger.info(
                 f"[{source_db} -> {dest_db}] Consultando datos para '{measurement}' en el período actual."
             )
             results = self._execute_with_retry(
-                self.source_client.query, query, source_db
+                self.source_client.query_data, source_db, query
             )
-            if not results:
-                logger.debug(
-                    f"La consulta para '{measurement}' no devolvió resultados para el rango."
+
+            # Extraer y transformar puntos
+            points_to_write = self.source_client.extract_points_from_result(
+                results
+            )
+
+            if not points_to_write:
+                logger.info(
+                    f"[{source_db}] No se encontraron nuevos puntos para '{measurement}' en este período."
                 )
                 return
 
-            points_to_write = []
-            for point_group in results.items():
-                # point_group es una tupla: (('measurement_name', {tags...}), [puntos...])
-                series_tags = point_group[0][1]
-                series_points = point_group[1]
+            logger.info(
+                f"[{source_db}] Se encontraron {len(points_to_write)} puntos válidos (no nulos) para los campos de interés en este período."
+            )
 
-                for p in series_points:
-                    # Filtramos explícitamente los campos para escribir SOLO los que corresponden a este backup.
-                    # Esta es la corrección clave para evitar la contaminación de datos.
-                    filtered_fields = {
-                        k: v
-                        for k, v in p.items()
-                        if k in fields_to_backup and v is not None
-                    }
-
-                    point = {
-                        "measurement": measurement,
-                        "tags": series_tags,
-                        "time": p["time"],
-                        "fields": filtered_fields,
-                    }
-                    # Solo añadir el punto si tiene al menos un campo válido tras el filtrado
-                    if point["fields"]:
-                        points_to_write.append(point)
-
-            if points_to_write:
-                logger.info(
-                    f"[{source_db}] Se encontraron {len(points_to_write)} puntos válidos (no nulos) para los campos de interés en este período."
-                )
-                logger.info(
-                    f"[{source_db} -> {dest_db}] Escribiendo {len(points_to_write)} puntos de '{measurement}'."
-                )
-                self._execute_with_retry(
-                    self.dest_client.write_points, points_to_write, dest_db
-                )
-                logger.info(
-                    f"[{dest_db}] Escritura completada para '{measurement}' en este período."
-                )
-            else:
-                logger.info(
-                    f"No se encontraron nuevos puntos válidos (no nulos) para los campos de interés en este período."
-                )
+            # Escribir en el destino
+            logger.info(
+                f"[{source_db} -> {dest_db}] Escribiendo {len(points_to_write)} puntos de '{measurement}'."
+            )
+            self._execute_with_retry(
+                self.dest_client.write_points, points_to_write, dest_db
+            )
+            logger.info(
+                f"[{dest_db}] Escritura completada para '{measurement}' en este período."
+            )
 
         except Exception as e:
             logger.error(
                 f"Fallo en la transferencia de datos para '{measurement}': {e}"
             )
+            # Re-lanzar para que el scheduler lo marque como fallido y lo reintente
+            raise
 
     def _build_query(
         self, source_db, measurement, start_time, end_time, fields_to_backup

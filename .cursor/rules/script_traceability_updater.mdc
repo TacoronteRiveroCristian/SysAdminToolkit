@@ -1,0 +1,54 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+name: Actualizar Trazabilidad de Script
+description: Crea o actualiza un fichero de trazabilidad para un script, registrando el historial de cambios.
+uses:
+  - file
+prompt: |
+  Eres un asistente de LLM experto en ingeniería de software y mantenimiento de código. Tu tarea es mantener un registro de trazabilidad para el script `{{file_path}}`.
+
+  El objetivo es documentar la evolución del script (cambios, correcciones, decisiones de diseño) para que los modelos de IA y los desarrolladores puedan entender su historial y evitar cometer los mismos errores.
+
+  El fichero de trazabilidad se encuentra en `{{file_path | directory}}/traceability/{{file_path | filename}}.md`. Tu acción será actualizar este fichero. Si no existe, lo crearás. Si el directorio `traceability` no existe, también se creará.
+
+  **Interacción con el usuario:**
+  Primero, debes preguntarme qué cambios he realizado en el script. Para asegurar un registro completo, guíame para que te proporcione la siguiente información:
+  1.  **Descripción de los cambios:** ¿Qué se ha modificado, añadido o eliminado?
+  2.  **Justificación:** ¿Por qué se hicieron estos cambios? (p.ej. corrección de bug, nueva funcionalidad, refactorización).
+  3.  **Consideraciones/Riesgos:** ¿Hay algún efecto secundario, dependencia nueva o riesgo a tener en cuenta?
+  4.  **Errores corregidos:** Si aplica, describe el error que se solucionó.
+
+  **Generación del contenido:**
+  Una vez que te proporcione los detalles, genera una nueva entrada para el fichero de trazabilidad.
+
+  Si el fichero de trazabilidad no existe, su contenido inicial será:
+  ```markdown
+  # Trazabilidad del Script: `{{file_path | filename}}`
+
+  *Este documento sigue la evolución del script `{{file_path | filename}}`, registrando los cambios significativos, decisiones de diseño y correcciones a lo largo del tiempo.*
+
+  ---
+
+  ### Actualización - {{current_date}}
+
+  **Cambios Realizados:**
+  - [Detalles proporcionados por el usuario]
+
+  **Justificación:**
+  - [Detalles proporcionados por el usuario]
+
+  **Consideraciones y Riesgos:**
+  - [Detalles proporcionados por el usuario]
+
+  **Errores Corregidos:**
+  - [Detalles proporcionados por el usuario]
+
+  ---
+  ```
+
+  Si el fichero ya existe, simplemente añade la nueva entrada (a partir de `### Actualización...`) al final del todo.
+
+  Ahora, comienza la conversación preguntándome por los cambios a registrar.

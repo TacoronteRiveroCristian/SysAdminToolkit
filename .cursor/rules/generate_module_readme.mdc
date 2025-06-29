@@ -1,0 +1,130 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+---
+description:
+globs:
+alwaysApply: false
+---
+# REGLA PARA GENERAR README DE MÓDULO v2
+
+## OBJETIVO
+Esta regla te guía para generar un archivo `README.md` que documente un módulo específico del proyecto Alojera. El `README.md` debe ser exhaustivo, explicando la funcionalidad del módulo, el flujo de datos detallado para cada tarea con **diagramas de secuencia** y la programación de ejecuciones a través de un **diagrama de Gantt**. Se basa en el formato del fichero `remote_link/README.md`.
+
+## INSTRUCCIONES
+
+Cuando el usuario te pida usar esta regla (por ejemplo, invocando `@generate_module_readme.v2`) y te proporcione la ruta a un módulo (ej. `remote_link/`), sigue estos pasos:
+
+### 1. **Análisis del Fichero `main.py`**
+
+- **Lee y comprende el `main.py`** del directorio que te ha indicado el usuario.
+- **Identifica la orquestación principal**, normalmente en la función `main` y el bloque `if __name__ == "__main__":`.
+- **Desglosa las tareas**: Identifica cada llamada a función significativa. Anota el orden en que se ejecutan.
+### 2. **Análisis Detallado de Flujo de Datos y Lógica para Cada Tarea**
+
+Para cada tarea (función) identificada:
+- **Investiga la función**: Navega a su definición para comprender su lógica interna.
+- **Identifica el Origen de los Datos (Inputs)**:
+    - **Sistema**: ¿De dónde vienen los datos? (Ej: InfluxDB Local, InfluxDB Remoto, API Externa, Ficheros locales).
+    - **Base de Datos / Endpoint**: El nombre de la base de datos o la URL de la API.
+    - **Medida / Tabla / Recurso**: El `measurement`, tabla o recurso específico consultado.
+- **Identifica el Destino de los Datos (Outputs)**:
+    - **Sistema**: ¿A dónde van los datos?
+    - **Base de Datos / Endpoint**: El nombre de la base de datos o la URL.
+    - **Medida / Tabla / Recurso**: El `measurement` o fichero donde se escriben los resultados.
+- **Prepara la Descripción**: Redacta una explicación clara y detallada de lo que hace la función, incluyendo cualquier lógica condicional importante (ej: fallbacks).
+
+### 3. **Generación del `README.md`**
+
+Crea un nuevo archivo `README.md` en la raíz del módulo. Si ya existe, propone sobreescribirlo. El contenido debe seguir estrictamente la siguiente estructura, inspirada en `remote_link/README.md`:
+
+```markdown
+# Módulo: `<Nombre del Módulo>`
+
+## Descripción General
+
+<Proporciona un resumen de alto nivel de lo que hace este módulo, su propósito y sus responsabilidades clave dentro del sistema Alojera.>
+
+---
+
+## Desglose de Tareas y Flujos de Datos
+
+<A continuación se detallan las tareas programadas que se orquestan desde el `main.py` de este módulo, junto con diagramas que ilustran su funcionamiento.>
+
+### Tarea 1: `<nombre_de_la_funcion_1>`
+
+- **Descripción**: <Escribe aquí la descripción detallada que preparaste. Explica la lógica, el propósito y el valor de la tarea.>
+- **Flujo de Datos**:
+  - **Origen**:
+    - **Sistema**: <Ej: InfluxDB (Local)>
+    - **Base de Datos**: `<Nombre de la DB o "N/A">`
+    - **Medida**: `<Nombre del Measurement o "N/A">`
+  - **Destino**:
+    - **Sistema**: <Ej: InfluxDB (Remoto)>
+    - **Base de Datos**: `<Nombre de la DB o "N/A">`
+    - **Medida**: `<Nombre del Measurement o "N/A">`
+- **Diagrama de Secuencia**:
+  ```mermaid
+  sequenceDiagram
+      participant Actor1 as "Nombre del Actor 1"
+      participant Actor2 as "Nombre del Actor 2"
+      Actor1->>Actor2: Describir interacción
+      Actor2-->>Actor1: Describir respuesta
+  ```
+
+<Repite la estructura "Tarea X" para todas las funciones identificadas.>
+
+---
+
+## Plan de Ejecución
+
+<El siguiente diagrama de Gantt visualiza la planificación horaria de las tareas dentro de un ciclo de 24 horas.>
+
+<Aquí irá el diagrama de Gantt en Mermaid que crearás en el siguiente paso.>
+```
+
+### 4. **Creación de Diagramas (Secuencia y Gantt)**
+
+#### Diagramas de Secuencia (Mermaid)
+- Para cada tarea, crea un `sequenceDiagram`.
+- Identifica los participantes (ej. `Script`, `InfluxDB_Local`, `API_Externa`).
+- Modela las interacciones clave: la solicitud de datos, la respuesta, el procesamiento y la escritura de resultados.
+- Usa `Note` para añadir aclaraciones importantes (ej. `Note right of Script: La petición incluye el token...`).
+- Inserta el diagrama en la sección correspondiente del `README.md`.
+
+#### Diagrama de Gantt (Mermaid)
+- **Analiza el Scheduling**: Revisa `supervisord.conf` y el código (`schedule` en `main.py`) para determinar las horas de ejecución.
+- **Diseña el Diagrama**:
+    - Usa el tipo `gantt` con un título descriptivo: `title Plan de Ejecución de Tareas para <Nombre del Módulo>`.
+    - Define `dateFormat HH:mm` y `axisFormat %H:%M`.
+    - Agrupa las tareas en secciones lógicas si aplica (ej. `Tareas Diarias`, `Sincronización Continua`).
+    - Cuando las tareas son minutales, horarias, etc, es decir que se ejecutan durante todo el dia con una frecuencia determinada, se debe de representar la tarea a mitad del dia... y antes de esa representacion y despues de esa representacion quiero que se ponga algo como "... Resto de ejecuciones"              : XX:XX, XX:XX para asi representar de alguna forma que la tarea se ejecuta todo el dia tal y como se muestra en el ejemplo.
+    - Define cada tarea con su nombre, hora de inicio y duración (ej. `01:05, 5m`).
+    - Usa `done` para indicar ejecuciones pasadas en tareas recurrentes y muestra un par de ejecuciones futuras para ilustrar el patrón.
+- **Inserta el código Mermaid** en la sección `Plan de Ejecución` del `README.md`.
+
+**Ejemplo de bloque Gantt:**
+```mermaid
+gantt
+    title Plan de Ejecución de Tareas para <Módulo>
+    dateFormat HH:mm
+    axisFormat %H:%M
+    todayMarker stroke-width:0px,stroke:red
+
+    section Tareas Diarias
+    "Nombre Tarea 1" : 01:05, 5m
+    "Nombre Tarea 2" : 05:30, 5m
+
+    section Sincronización Continua: Ejemplo
+    "Ejecuciones Anteriores"                : done, 00:00, 12h
+    "Tarea Recurrente (cada 10 min)"        : 12:00, 2m
+    "Tarea Recurrente (cada 10 min)"        : 12:10, 2m
+    "... resto de ejecuciones"              : 12:20, 23:59
+```
+
+### 5. **Finalización**
+
+- Revisa el `README.md` generado para asegurar que es claro, correcto, completo y sigue fielmente el formato del ejemplo.
+- Notifica al usuario que has creado/actualizado el `README.md` v2 en la carpeta `.cursor/rules/` y estás listo para usarla.

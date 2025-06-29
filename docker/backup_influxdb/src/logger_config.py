@@ -3,15 +3,23 @@ import sys
 from logging import FileHandler
 from logging.handlers import TimedRotatingFileHandler
 
+from logging_loki import LokiHandler
+
 
 def setup_logging(
-    log_level_str, log_file, process_name=None, rotation_config=None
+    log_level_str,
+    log_file,
+    process_name=None,
+    rotation_config=None,
+    loki_config=None,
 ):
     """
     Configura el logging para la aplicación.
     """
     if rotation_config is None:
         rotation_config = {}
+    if loki_config is None:
+        loki_config = {}
 
     log_level = getattr(logging, log_level_str.upper(), logging.INFO)
 
@@ -76,5 +84,30 @@ def setup_logging(
                 f"No se pudo configurar el logging en el archivo {log_file}: {e}"
             )
             logging.error("Los logs solo se mostrarán en la consola.")
+
+    # Handler para Loki
+    if loki_config.get("enabled"):
+        try:
+            loki_url = loki_config.get("url", "loki")
+            loki_port = loki_config.get("port", 3100)
+
+            # Las etiquetas base vienen de la config, y añadimos una dinámica
+            tags = loki_config.get("tags", {})
+            if process_name:
+                tags["config_name"] = process_name
+
+            loki_handler = LokiHandler(
+                url=f"http://{loki_url}:{loki_port}/loki/api/v1/push",
+                tags=tags,
+                version="1",
+            )
+
+            root_logger.addHandler(loki_handler)
+            logging.info(
+                f"Logging hacia Loki ({loki_url}:{loki_port}) habilitado."
+            )
+
+        except Exception as e:
+            logging.error(f"No se pudo configurar el handler para Loki: {e}")
 
     logging.info(f"Nivel de log establecido en: {log_level_str.upper()}")

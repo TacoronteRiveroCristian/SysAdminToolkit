@@ -183,16 +183,23 @@ options:
   # Un valor mayor (ej. 30) es más rápido pero consume más memoria.
   days_of_pagination: 7
 
+  # Umbral para considerar un campo obsoleto. Si el último dato de un campo específico
+  # en el destino es más antiguo que este umbral, dicho campo se ignorará en el backup.
+  # Esto evita consultas innecesarias para campos que ya no reciben datos.
+  # Unidades válidas: s, m, h, d, w, M (meses), y (años). Ejemplo: "6M" para 6 meses.
+  # Dejar vacío "" para deshabilitar esta comprobación.
+  field_obsolete_threshold: "6M"
+
+  # Segundos de espera antes de reintentar una conexión fallida al iniciar.
+  # Si el script no puede conectar con InfluxDB al arrancar, esperará este tiempo
+  # antes de volver a intentarlo. Esto se aplica a la conexión inicial.
+  initial_connection_retry_delay: 60
+
   # --- Configuración de Logs ---
   # Directorio para los archivos de log dentro del contenedor.
   # El sistema creará automáticamente un subdirectorio con el nombre del fichero de configuración.
   # Ejemplo: /var/log/backup_influxdb/
   log_directory: /var/log/backup_influxdb/
-
-  # Nivel de log: DEBUG, INFO, WARNING, ERROR, CRITICAL
-  # DEBUG: muy detallado.
-  # INFO: recomendado para operación normal.
-  log_level: INFO
 
   # Configuración de rotación de logs
   # Permite rotar los archivos de log basados en tiempo para no ocupar todo el disco.
@@ -206,3 +213,23 @@ options:
     interval: 1
     # Cuántos archivos de log antiguos mantener.
     backup_count: 5
+
+  # Configuración para enviar logs a Loki
+  loki:
+    # Habilitar o deshabilitar el envío de logs a Loki.
+    enabled: false
+    # URL del servidor Loki (sin http:// ni el puerto).
+    url: "loki"
+    # Puerto del servidor Loki.
+    port: 3100
+    # Etiquetas (tags) que se añadirán a todos los logs enviados a Loki.
+    # Es útil para filtrar en Grafana/Loki.
+    # Se añadirá automáticamente la etiqueta 'config_name' con el nombre del fichero .yaml.
+    tags:
+      app: "influxdb_backup"
+      environment: "production"
+
+  # Nivel de log: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  # DEBUG: muy detallado.
+  # INFO: recomendado para operación normal.
+  log_level: INFO

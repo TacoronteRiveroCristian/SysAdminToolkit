@@ -3,6 +3,7 @@ import logging
 import multiprocessing
 import os
 import sys
+import time
 from pathlib import Path
 
 # Añadir el directorio 'src' al sys.path para importaciones relativas
@@ -20,6 +21,56 @@ from src.scheduler import Scheduler, run_job_once
 # Configuración inicial del logger para el proceso principal
 setup_logging("INFO", None, process_name="main")
 logger = logging.getLogger(__name__)
+
+
+def initialize_clients(config: Config):
+    """
+    Intenta inicializar los clientes de InfluxDB con reintentos indefinidos.
+    """
+    retry_delay = config.get("options.initial_connection_retry_delay", 60)
+
+    source_url = config.get("source.url")
+    dest_url = config.get("destination.url")
+
+    if not source_url or not dest_url:
+        logger.critical(
+            "Las URLs de origen y destino son obligatorias en la configuración."
+        )
+        # Salir del proceso worker si falta configuración esencial.
+        # No se puede continuar sin URLs.
+        raise ValueError(
+            "URLs de InfluxDB no especificadas en la configuración."
+        )
+
+    while True:
+        try:
+            logger.info("Inicializando clientes de InfluxDB...")
+            source_client = InfluxClient(
+                url=source_url,
+                user=config.get("source.user", ""),
+                password=config.get("source.password", ""),
+                timeout=config.get("options.timeout_client", 20),  # type: ignore
+                ssl=config.get("source.ssl", False),  # type: ignore
+                verify_ssl=config.get("source.verify_ssl", True),  # type: ignore
+            )
+
+            dest_client = InfluxClient(
+                url=dest_url,
+                user=config.get("destination.user", ""),
+                password=config.get("destination.password", ""),
+                timeout=config.get("options.timeout_client", 20),  # type: ignore
+                ssl=config.get("destination.ssl", False),  # type: ignore
+                verify_ssl=config.get("destination.verify_ssl", True),  # type: ignore
+            )
+            logger.info("Clientes de InfluxDB inicializados correctamente.")
+            return source_client, dest_client
+
+        except Exception as e:
+            logger.warning(
+                f"No se pudo conectar a InfluxDB: {e}. "
+                f"Reintentando en {retry_delay} segundos..."
+            )
+            time.sleep(retry_delay)  # type: ignore
 
 
 def run_worker(config_path: str):
@@ -41,6 +92,7 @@ def run_worker(config_path: str):
 
     log_level = config.get("options.log_level", "INFO")
     log_rotation_config = config.get("options.log_rotation", {})
+    loki_config = config.get("options.loki", {})
 
     # Crear la ruta del log a partir del directorio y el nombre de la config
     base_log_dir = (
@@ -57,31 +109,14 @@ def run_worker(config_path: str):
         log_file,
         process_name=config_name,
         rotation_config=log_rotation_config,
+        loki_config=loki_config,
     )
 
     logger.info(f"Iniciando proceso de backup para '{config_name}'")
 
     try:
-        # Inicializar clientes de InfluxDB
-        logger.info("Inicializando clientes de InfluxDB...")
-        source_client = InfluxClient(
-            url=config.get("source.url"),
-            user=config.get("source.user", ""),
-            password=config.get("source.password", ""),
-            timeout=config.get("options.timeout_client", 20),  # type: ignore
-            ssl=config.get("source.ssl", False),  # type: ignore
-            verify_ssl=config.get("source.verify_ssl", True),  # type: ignore
-        )
-
-        dest_client = InfluxClient(
-            url=config.get("destination.url"),
-            user=config.get("destination.user", ""),
-            password=config.get("destination.password", ""),
-            timeout=config.get("options.timeout_client", 20),  # type: ignore
-            ssl=config.get("destination.ssl", False),  # type: ignore
-            verify_ssl=config.get("destination.verify_ssl", True),  # type: ignore
-        )
-        logger.info("Clientes de InfluxDB inicializados correctamente.")
+        # Inicializar clientes de InfluxDB con reintentos
+        source_client, dest_client = initialize_clients(config)
 
         # Inicializar el gestor de backup
         backup_manager = BackupManager(config, source_client, dest_client)
@@ -94,7 +129,7 @@ def run_worker(config_path: str):
             logger.info(f"Backup 'range' completado para '{config_name}'.")
 
         elif backup_mode == "incremental":
-            cron_schedule = config.get("incremental.schedule", "")
+            cron_schedule = config.get("options.incremental.schedule", "")
             if cron_schedule:
                 logger.info(
                     f"Iniciando planificador (cron) para '{config_name}'."
