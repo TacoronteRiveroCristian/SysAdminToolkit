@@ -1,0 +1,43 @@
+FROM python:3.11-slim
+
+# Metadatos
+LABEL maintainer="InfluxDB Backup Toolkit Team"
+LABEL description="Contenedor para ejecutar tests del sistema de backup de InfluxDB"
+
+# Configurar variables de entorno
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV TESTING=true
+
+# Instalar dependencias del sistema
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    git \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Crear directorio de trabajo
+WORKDIR /app
+
+# Copiar archivos de dependencias
+COPY requirements.txt /app/
+COPY test/requirements-test.txt /app/
+
+# Instalar dependencias de Python
+RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements-test.txt
+
+# Copiar código fuente
+COPY . /app/
+
+# Crear directorios necesarios
+RUN mkdir -p /app/test_results
+RUN mkdir -p /app/test_logs
+RUN mkdir -p /app/test_data
+
+# Configurar permisos
+RUN chmod +x /app/test/scripts/*.sh 2>/dev/null || true
+
+# Comando por defecto
+CMD ["python", "-m", "pytest", "test/", "-v", "--tb=short"]

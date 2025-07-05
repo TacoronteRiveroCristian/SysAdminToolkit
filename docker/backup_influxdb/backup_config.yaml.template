@@ -32,14 +32,14 @@ source:
   #   - name: Nombre de la base de datos en el origen.
   #   - destination: Nombre que tendrá en el destino (puede ser el mismo).
   #
-  # Ejemplo (respaldar solo BBDD específicas):
+  # Ejemplo (respaldar solo bases de datos específicas del servidor InfluxDB de origen):
   # databases:
   #   - name: telegraf
   #     destination: telegraf
   #   - name: database_2
   #     destination: database_2_backup
   #
-  # Ejemplo (respaldar TODAS las BBDD):
+  # Ejemplo (respaldar TODAS las bases de datos del servidor InfluxDB de origen):
   # databases: []
   databases:
     - name: metrics
@@ -74,7 +74,7 @@ source:
   # - O usar comillas vacías: group_by: ""
   # NOTA: La paginación (para conjuntos grandes de datos) REQUIERE un valor válido.
   # Si los datos abarcan más días que 'days_of_pagination', debes especificar un valor.
-  group_by: "5m"
+  group_by: ""
 
 # Configuración InfluxDB destino
 destination:
@@ -172,11 +172,6 @@ options:
   # --- Configuración para modo 'incremental' (backup continuo) ---
   # Se utiliza solo si backup_mode es 'incremental'.
   incremental:
-    # Umbral para mediciones obsoletas. Si el último dato en el destino es más antiguo
-    # que este umbral, la medición se ignora para no realizar consultas innecesarias.
-    # Unidades válidas: s, m, h, d, w, M (meses), y (años). Ejemplo: "6M" para 6 meses.
-    obsolete_threshold: "1y"
-
     # Expresión cron para backups programados.
     # Si se deja vacío, se ejecutará una sola vez en modo incremental.
     # Ejemplos: "0 0 * * *" (diario), "0 */6 * * *" (cada 6 horas).
@@ -213,7 +208,8 @@ options:
   # --- Configuración de Logs ---
   # Directorio para los archivos de log dentro del contenedor.
   # El sistema creará automáticamente un subdirectorio con el nombre del fichero de configuración.
-  # Ejemplo: /var/log/backup_influxdb/
+  # Ejemplo: /var/log/backup_influxdb/ y dentro de este directorio se creará otro directorio con el
+  # nombre del archivo de configuración .yaml donde se encontrarán todos los .log rotando
   log_directory: /var/log/backup_influxdb/
 
   # Configuración de rotación de logs

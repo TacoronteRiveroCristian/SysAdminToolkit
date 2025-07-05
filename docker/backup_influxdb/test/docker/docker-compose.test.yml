@@ -1,0 +1,115 @@
+version: '3.8'
+
+services:
+  # Servidor InfluxDB origen para testing
+  influxdb_source_test:
+    image: influxdb:1.8
+    container_name: influxdb_source_test
+    ports:
+      - "8086:8086"
+    environment:
+      - INFLUXDB_DB=test_db
+      - INFLUXDB_ADMIN_USER=admin
+      - INFLUXDB_ADMIN_PASSWORD=password
+      - INFLUXDB_USER=testuser
+      - INFLUXDB_USER_PASSWORD=testpass
+      - INFLUXDB_HTTP_AUTH_ENABLED=true
+      - INFLUXDB_HTTP_LOG_ENABLED=true
+      - INFLUXDB_DATA_QUERY_LOG_ENABLED=true
+    volumes:
+      - influxdb_source_test_data:/var/lib/influxdb
+      - ./influxdb_source.conf:/etc/influxdb/influxdb.conf:ro
+    networks:
+      - influxdb_test_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8086/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    command: influxd -config /etc/influxdb/influxdb.conf
+
+  # Servidor InfluxDB destino para testing
+  influxdb_destination_test:
+    image: influxdb:1.8
+    container_name: influxdb_destination_test
+    ports:
+      - "8087:8086"
+    environment:
+      - INFLUXDB_DB=test_db_backup
+      - INFLUXDB_ADMIN_USER=admin
+      - INFLUXDB_ADMIN_PASSWORD=password
+      - INFLUXDB_USER=testuser
+      - INFLUXDB_USER_PASSWORD=testpass
+      - INFLUXDB_HTTP_AUTH_ENABLED=true
+      - INFLUXDB_HTTP_LOG_ENABLED=true
+      - INFLUXDB_DATA_QUERY_LOG_ENABLED=true
+    volumes:
+      - influxdb_destination_test_data:/var/lib/influxdb
+      - ./influxdb_destination.conf:/etc/influxdb/influxdb.conf:ro
+    networks:
+      - influxdb_test_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8086/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    command: influxd -config /etc/influxdb/influxdb.conf
+
+  # Servidor InfluxDB adicional para tests avanzados
+  influxdb_extra_test:
+    image: influxdb:1.8
+    container_name: influxdb_extra_test
+    ports:
+      - "8088:8086"
+    environment:
+      - INFLUXDB_DB=extra_test_db
+      - INFLUXDB_ADMIN_USER=admin
+      - INFLUXDB_ADMIN_PASSWORD=password
+      - INFLUXDB_USER=testuser
+      - INFLUXDB_USER_PASSWORD=testpass
+      - INFLUXDB_HTTP_AUTH_ENABLED=true
+    volumes:
+      - influxdb_extra_test_data:/var/lib/influxdb
+      - ./influxdb_extra.conf:/etc/influxdb/influxdb.conf:ro
+    networks:
+      - influxdb_test_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8086/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    command: influxd -config /etc/influxdb/influxdb.conf
+
+  # Contenedor para ejecutar los tests
+  test_runner:
+    build:
+      context: ../..
+      dockerfile: test/docker/Dockerfile.test
+    container_name: influxdb_test_runner
+    volumes:
+      - ../../:/app
+      - test_results:/app/test_results
+    depends_on:
+      - influxdb_source_test
+      - influxdb_destination_test
+      - influxdb_extra_test
+    networks:
+      - influxdb_test_network
+    environment:
+      - INFLUXDB_SOURCE_URL=http://influxdb_source_test:8086
+      - INFLUXDB_DESTINATION_URL=http://influxdb_destination_test:8086
+      - INFLUXDB_EXTRA_URL=http://influxdb_extra_test:8086
+      - INFLUXDB_USER=admin
+      - INFLUXDB_PASSWORD=password
+      - TESTING=true
+    command: tail -f /dev/null  # Mantener el contenedor activo
+
+volumes:
+  influxdb_source_test_data:
+  influxdb_destination_test_data:
+  influxdb_extra_test_data:
+  test_results:
+
+networks:
+  influxdb_test_network:
+    driver: bridge
